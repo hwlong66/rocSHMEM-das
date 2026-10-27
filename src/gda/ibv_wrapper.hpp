@@ -25,11 +25,7 @@
 #ifndef LIBRARY_SRC_GDA_IBV_WRAPPER_HPP_
 #define LIBRARY_SRC_GDA_IBV_WRAPPER_HPP_
 
-#if defined(GDA_SHCA)
-#include <infiniband/verbs.h>
-#else
 #include "ibv_core.hpp"
-#endif
 #include "memory/hip_allocator.hpp"
 #include <sys/types.h>
 #include <map>
@@ -46,6 +42,15 @@ class IBVWrapper {
     virtual ~IBVWrapper();
 
     bool is_initialized{false};
+
+    struct ContextInfo {
+      ibv_device* device;
+      int cmd_fd;
+      int async_fd;
+      int num_comp_vectors;
+      void* abi_compat;
+    };
+    ContextInfo context_info(ibv_context* context) const;
 
     int is_dmabuf_supported();
 
@@ -140,6 +145,9 @@ class IBVWrapper {
      * @brief handle used for the dlopen of the InfiniBand Verbs library
      */
     void *ibv_handle = nullptr;
+
+    // Convert only when the build SDK and loaded library use different ABIs.
+    bool needs_abi_conversion_ = false;
 
     /**
      * @brief initialize function table

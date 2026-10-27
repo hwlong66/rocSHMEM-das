@@ -133,9 +133,9 @@ foreach(_t IN LISTS FUNCTIONAL_TEST_TARGETS)
 endforeach()
 
 configure_file(../../scripts/functional_tests/driver.sh rocshmem_functional_driver.sh COPYONLY)
-rocm_install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/rocshmem_functional_driver.sh COMPONENT tests DESTINATION ${CMAKE_INSTALL_BINDIR})
+rocm_install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/rocshmem_functional_driver.sh COMPONENT tests DESTINATION ${CMAKE_INSTALL_DATADIR}/rocshmem)
 foreach(_t IN LISTS FUNCTIONAL_TEST_TARGETS)
-  install(TARGETS ${_t} COMPONENT tests RUNTIME DESTINATION ${CMAKE_INSTALL_DATADIR}/rocshmem)
+  install(TARGETS ${_t} COMPONENT tests RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 endforeach()
 
 # Common link libraries shared by all functional test executables.

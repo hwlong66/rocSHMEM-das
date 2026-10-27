@@ -42,8 +42,7 @@
 #if defined(GDA_SHCA)
 
 #include <infiniband/verbs.h>
-
-#else
+#endif
 
 #include <stdint.h>
 #include <limits>
@@ -51,11 +50,19 @@
 #include <linux/types.h>
 #include <linux/if_ether.h>
 
+#if defined(GDA_SHCA)
+namespace rocshmem::verbs_abi {
+#else
 extern "C" {
+#endif
 
 /* infiniband/ib_user_ioctl_verbs.h */
+#ifndef IB_UVERBS_ACCESS_OPTIONAL_FIRST
 #define IB_UVERBS_ACCESS_OPTIONAL_FIRST (1 << 20)
+#endif
+#ifndef IB_UVERBS_ACCESS_OPTIONAL_LAST
 #define IB_UVERBS_ACCESS_OPTIONAL_LAST (1 << 29)
+#endif
 
 enum ib_uverbs_access_flags {
 	IB_UVERBS_ACCESS_LOCAL_WRITE = 1 << 0,
@@ -80,10 +87,16 @@ enum ib_uverbs_advise_mr_advice {
 };
 
 /* infiniband/verbs_api.h */
+#if !defined(GDA_SHCA) && !defined(ibv_advise_mr_advice)
 #define ibv_advise_mr_advice                            ib_uverbs_advise_mr_advice
+#endif
 
+#ifndef IBV_ACCESS_OPTIONAL_RANGE
 #define IBV_ACCESS_OPTIONAL_RANGE			IB_UVERBS_ACCESS_OPTIONAL_RANGE
+#endif
+#ifndef IBV_ACCESS_OPTIONAL_FIRST
 #define IBV_ACCESS_OPTIONAL_FIRST			IB_UVERBS_ACCESS_OPTIONAL_FIRST
+#endif
 
 /* infiniband/verbs.h */
 union ibv_gid {
@@ -108,7 +121,9 @@ struct ibv_gid_entry {
 	uint32_t ndev_ifindex;
 };
 
+#ifndef __VERBS_ABI_IS_EXTENDED
 #define __VERBS_ABI_IS_EXTENDED ((void *)std::numeric_limits<uintptr_t>::max())
+#endif
 
 enum ibv_node_type {
 	IBV_NODE_UNKNOWN	= -1,
@@ -510,7 +525,9 @@ static inline struct ibv_cq *ibv_cq_ex_to_cq(struct ibv_cq_ex *cq)
 	return (struct ibv_cq *)cq;
 }
 
+#ifndef ETHERNET_LL_SIZE
 #define ETHERNET_LL_SIZE ETH_ALEN
+#endif
 
 /* Obsolete, never used, do not touch */
 struct _ibv_device_ops {
@@ -648,7 +665,7 @@ struct verbs_context {
 			  struct ibv_port_attr *port_attr,
 			  size_t port_attr_len);
 	int (*advise_mr)(struct ibv_pd *pd,
-			 enum ibv_advise_mr_advice advice,
+			 enum ib_uverbs_advise_mr_advice advice,
 			 uint32_t flags,
 			 struct ibv_sge *sg_list,
 			 uint32_t num_sges);
@@ -731,10 +748,12 @@ static inline struct verbs_context *verbs_get_ctx(struct ibv_context *ctx)
 						 context));
 }
 
+#ifndef verbs_get_ctx_op
 #define verbs_get_ctx_op(ctx, op) ({ \
 	struct verbs_context *__vctx = verbs_get_ctx(ctx); \
 	(!__vctx || (__vctx->sz < sizeof(*__vctx) - offsetof(struct verbs_context, op)) || \
 	 !__vctx->op) ? NULL : __vctx; })
+#endif
 
 /**
  * ibv_create_cq_ex - Create a completion queue
@@ -773,9 +792,15 @@ ibv_alloc_parent_domain(struct ibv_context *context,
 	return vctx->alloc_parent_domain(context, attr);
 }
 
+#ifndef IB_ROCE_UDP_ENCAP_VALID_PORT_MIN
 #define IB_ROCE_UDP_ENCAP_VALID_PORT_MIN (0xC000)
+#endif
+#ifndef IB_ROCE_UDP_ENCAP_VALID_PORT_MAX
 #define IB_ROCE_UDP_ENCAP_VALID_PORT_MAX (0xFFFF)
+#endif
+#ifndef IB_GRH_FLOWLABEL_MASK
 #define IB_GRH_FLOWLABEL_MASK (0x000FFFFF)
+#endif
 
 static inline uint16_t ibv_flow_label_to_udp_sport(uint32_t fl)
 {
@@ -785,8 +810,10 @@ static inline uint16_t ibv_flow_label_to_udp_sport(uint32_t fl)
 	return (uint16_t)(fl_low | IB_ROCE_UDP_ENCAP_VALID_PORT_MIN);
 }
 
+#if defined(GDA_SHCA)
+} // namespace rocshmem::verbs_abi
+#else
 } /* extern "C" */
-
-#endif  // defined(GDA_SHCA)
+#endif
 
 #endif  // LIBRARY_SRC_GDA_IBV_CORE_HPP_

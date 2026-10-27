@@ -27,6 +27,7 @@
 #include "log.hpp"
 #include "util.hpp"
 #include "memory/default_allocator.hpp"
+#include "ibv_abi.hpp"
 
 #include "rocshmem/rocshmem.hpp"
 #include <dlfcn.h>
@@ -41,7 +42,9 @@ IBVWrapper ibv;
 IBVWrapper::IBVWrapper() {
   int err;
 
-  ibv_handle = dlopen("libibverbs.so", RTLD_NOW);
+  ibv_handle = dlopen("libibverbs.so.1", RTLD_NOW);
+
+  if (!ibv_handle) ibv_handle = dlopen("libibverbs.so", RTLD_NOW);
 
   if (!ibv_handle) {
     // Try hard-coded PATH
@@ -52,6 +55,27 @@ IBVWrapper::IBVWrapper() {
       return;
     }
   }
+
+  // The SHCA SDK adds six SDC callbacks to ibv_context_ops. Identify that
+  // extension on the actual loaded library, not from ROCSHMEM_GDA_PROVIDER.
+  const char* sdc_symbols[] = {"ibv_sdc_create_dct", "ibv_sdc_create_dci",
+      "ibv_sdc_destroy_dct", "ibv_sdc_destroy_dci", "ibv_sdc_modify_dci"};
+  unsigned sdc_count = 0;
+  for (const char* symbol : sdc_symbols)
+    sdc_count += dlsym(ibv_handle, symbol) != nullptr;
+  if (sdc_count != 0 && sdc_count != 5) {
+    LOG_WARN("Unrecognized partial SHCA verbs ABI (%u/5 SDC symbols); disabled",
+             sdc_count);
+    return;
+  }
+#if defined(GDA_SHCA)
+  needs_abi_conversion_ = sdc_count == 0;
+#else
+  if (sdc_count != 0) {
+    LOG_WARN("SHCA verbs ABI requires a GDA_SHCA build; disabled");
+    return;
+  }
+#endif
 
   err = init_function_table();
   if (err != ROCSHMEM_SUCCESS) {
@@ -169,6 +193,16 @@ struct ibv_context* IBVWrapper::open_device(struct ibv_device *device) {
 
 }
 
+IBVWrapper::ContextInfo IBVWrapper::context_info(ibv_context* context) const {
+  if (needs_abi_conversion_) {
+    const auto* native = verbs_abi::native_context(context);
+    return {reinterpret_cast<::ibv_device*>(native->device), native->cmd_fd, native->async_fd,
+            native->num_comp_vectors, native->abi_compat};
+  }
+  return {context->device, context->cmd_fd, context->async_fd,
+          context->num_comp_vectors, context->abi_compat};
+}
+
 int IBVWrapper::close_device(struct ibv_context *context) {
   return ibv.close_device(context);
 }
@@ -183,6 +217,20 @@ int IBVWrapper::query_device(struct ibv_context *context, struct ibv_device_attr
 
 int IBVWrapper::query_port(struct ibv_context* context, uint8_t port_num,
                            struct ibv_port_attr* port_attr) {
+  if (needs_abi_conversion_) {
+    verbs_abi::PortAttr native{};
+    auto query = verbs_abi::operation(context, &verbs_abi::VerbsContext::query_port);
+    int rc;
+    if (query) {
+      rc = query(verbs_abi::native_context(context), port_num, &native, sizeof(native));
+    } else {
+      using Query = int (*)(ibv_context*, uint8_t, verbs_abi::PortAttr*);
+      rc = reinterpret_cast<Query>(ibv.query_port)(context, port_num, &native);
+    }
+    if (rc) return rc;
+    verbs_abi::port_to_internal(native, port_attr);
+    return 0;
+  }
   // Passthrough function for ibv_query_port macro in verbs.h
   struct verbs_context *vctx = verbs_get_ctx_op(context, query_port);
 
@@ -216,6 +264,13 @@ struct ibv_pd* IBVWrapper::alloc_pd(struct ibv_context *context) {
 
 struct ibv_pd * IBVWrapper::alloc_parent_domain(struct ibv_context *context,
                                                 struct ibv_parent_domain_init_attr *attr) {
+  if (needs_abi_conversion_) {
+    auto create = verbs_abi::operation(context,
+        &verbs_abi::VerbsContext::alloc_parent_domain);
+    if (!create) { errno = EOPNOTSUPP; return nullptr; }
+    return reinterpret_cast<::ibv_pd*>(create(verbs_abi::native_context(context),
+        reinterpret_cast<verbs_abi::ParentDomainAttr*>(attr)));
+  }
   // Passthrough function for ibv_alloc_parent_domain macro in verbs.h
   return ibv_alloc_parent_domain(context, attr);
 }
@@ -284,6 +339,13 @@ int IBVWrapper::dereg_mr(struct ibv_mr *mr) {
 
 struct ibv_cq_ex *IBVWrapper::create_cq_ex(struct ibv_context *context,
                                            struct ibv_cq_init_attr_ex *cq_attr) {
+  if (needs_abi_conversion_) {
+    auto create = verbs_abi::operation(context,
+        &verbs_abi::VerbsContext::create_cq_ex);
+    if (!create) { errno = EOPNOTSUPP; return nullptr; }
+    return reinterpret_cast<::ibv_cq_ex*>(create(verbs_abi::native_context(context),
+        reinterpret_cast<verbs_abi::CqInitAttr*>(cq_attr)));
+  }
   // Passthrough function for ibv_create_cq_ex macro in verbs.h
   return ibv_create_cq_ex(context, cq_attr);
 }
@@ -306,6 +368,14 @@ struct ibv_qp * IBVWrapper::create_qp_ex(struct ibv_context *context,
   if (mask == IBV_QP_INIT_ATTR_PD)
     return ibv.create_qp(qp_init_attr_ex->pd, (struct ibv_qp_init_attr *)qp_init_attr_ex);
 
+  if (needs_abi_conversion_) {
+    auto create = verbs_abi::operation(context,
+        &verbs_abi::VerbsContext::create_qp_ex);
+    if (!create) { errno = EOPNOTSUPP; return nullptr; }
+    return reinterpret_cast<::ibv_qp*>(create(verbs_abi::native_context(context),
+        reinterpret_cast<verbs_abi::QpInitAttr*>(qp_init_attr_ex)));
+  }
+
   vctx = verbs_get_ctx_op(context, create_qp_ex);
   if (!vctx) {
     errno = EOPNOTSUPP;
@@ -315,6 +385,13 @@ struct ibv_qp * IBVWrapper::create_qp_ex(struct ibv_context *context,
 }
 
 int IBVWrapper::modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask) {
+  if (needs_abi_conversion_) {
+    verbs_abi::QpAttr native{};
+    int rc = verbs_abi::qp_from_internal(*attr, attr_mask, &native);
+    if (rc) { errno = rc; return rc; }
+    using Modify = int (*)(ibv_qp*, verbs_abi::QpAttr*, int);
+    return reinterpret_cast<Modify>(ibv.modify_qp)(qp, &native, attr_mask);
+  }
   return ibv.modify_qp(qp, attr, attr_mask);
 }
 
@@ -328,6 +405,13 @@ uint16_t IBVWrapper::flow_label_to_udp_sport(uint32_t fl) {
 }
 
 struct ibv_ah* IBVWrapper::create_ah(struct ibv_pd *pd, struct ibv_ah_attr *attr) {
+  if (needs_abi_conversion_) {
+    verbs_abi::AhAttr native{};
+    int rc = verbs_abi::ah_from_internal(*attr, &native);
+    if (rc) { errno = rc; return nullptr; }
+    using Create = ibv_ah* (*)(ibv_pd*, verbs_abi::AhAttr*);
+    return reinterpret_cast<Create>(ibv.create_ah)(pd, &native);
+  }
   return ibv.create_ah(pd, attr);
 }
 
