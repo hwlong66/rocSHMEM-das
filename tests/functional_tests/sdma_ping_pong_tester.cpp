@@ -138,7 +138,7 @@ __global__ void SdmaPingPongTest(int loop, int skip,
  * HOST TESTER CLASS METHODS
  *****************************************************************************/
 SdmaPingPongTester::SdmaPingPongTester(TesterArguments args) : Tester(args) {
-  s_buf = (char *)alloc_test_buffer(max_msg_size * args.num_wgs);
+  s_buf = (char *)alloc_test_source_buffer(max_msg_size * args.num_wgs);
   r_buf = (char *)alloc_test_buffer(max_msg_size * args.num_wgs);
   sig_addr = (uint64_t *)alloc_test_buffer(sizeof(uint64_t) * args.num_wgs);
   rtt_factor = 2;

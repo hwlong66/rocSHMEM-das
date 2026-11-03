@@ -629,6 +629,30 @@ static void setFilesLimit() {
   return ptr;
 }
 
+[[maybe_unused]] __host__ void *rocshmem_malloc_hdp(size_t size) {
+  VERIFY_BACKEND();
+
+  void *ptr{nullptr};
+  if (backend->get_type() == BackendType::RO_BACKEND) backend->heap.malloc(&ptr, size);
+  else backend->heap.malloc_hdp(&ptr, size);
+  rocshmem_barrier_all();
+
+  return ptr;
+}
+
+[[maybe_unused]] __host__ void *rocshmem_align_hdp(size_t alignment, size_t size) {
+  VERIFY_BACKEND();
+  void *ptr{nullptr};
+  if (alignment && !(alignment & (alignment - 1)) && alignment % sizeof(void*) == 0) {
+    if (backend->get_type() == BackendType::RO_BACKEND) backend->heap.malign(&ptr, alignment, size);
+    else backend->heap.malign_hdp(&ptr, alignment, size);
+  } else {
+    LOG_WARN("rocshmem_align_hdp: invalid alignment %zu; returning NULL", alignment);
+  }
+  rocshmem_barrier_all();
+  return ptr;
+}
+
 [[maybe_unused]] __host__ void *rocshmem_calloc(size_t count, size_t size) {
   VERIFY_BACKEND();
 

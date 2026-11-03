@@ -148,7 +148,7 @@ TeamReduceScatterWaveTester<T1, T2>::TeamReduceScatterWaveTester(
 
   // One source slice (n_pes * max_msg_size) and one dest slice (max_msg_size)
   // per wave across all WGs
-  s_buf = (T1 *)alloc_test_buffer(n_pes * max_msg_size * sizeof(T1) * total_waves,
+  s_buf = (T1 *)alloc_test_source_buffer(n_pes * max_msg_size * sizeof(T1) * total_waves,
                                   args.local_buf_type);
   r_buf = (T1 *)alloc_test_buffer(max_msg_size * sizeof(T1) * total_waves);
 

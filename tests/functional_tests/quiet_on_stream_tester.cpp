@@ -65,7 +65,7 @@ QuietOnStreamTester::QuietOnStreamTester(TesterArguments args)
   }
 
   // Allocate test buffers - one int per stream
-  source_buf = static_cast<int*>(alloc_test_buffer(num_streams * sizeof(int), args.local_buf_type));
+  source_buf = static_cast<int*>(alloc_test_source_buffer(num_streams * sizeof(int), args.local_buf_type));
   dest_buf = static_cast<int*>(alloc_test_buffer(num_streams * sizeof(int)));
 }
 

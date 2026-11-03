@@ -365,19 +365,19 @@ TileReduceTester::TileReduceTester(TesterArguments args) : Tester(args) {
   int tile_size = tile_extent_0 * tile_extent_1;
   int total_size = tile_size * num_teams;
 
-  source = (float *)rocshmem_malloc(total_size * sizeof(float));
+  source = (float *)alloc_test_source_buffer(total_size * sizeof(float));
   sum_dest = (float *)rocshmem_malloc(total_size * sizeof(float));
   max_dest = (float *)rocshmem_malloc(total_size * sizeof(float));
   min_dest = (float *)rocshmem_malloc(total_size * sizeof(float));
-  short_source = (short *)rocshmem_malloc(total_size * sizeof(short));
+  short_source = (short *)alloc_test_source_buffer(total_size * sizeof(short));
   short_sum_dest = (short *)rocshmem_malloc(total_size * sizeof(short));
   short_max_dest = (short *)rocshmem_malloc(total_size * sizeof(short));
   short_min_dest = (short *)rocshmem_malloc(total_size * sizeof(short));
-  int_source = (int *)rocshmem_malloc(total_size * sizeof(int));
+  int_source = (int *)alloc_test_source_buffer(total_size * sizeof(int));
   int_sum_dest = (int *)rocshmem_malloc(total_size * sizeof(int));
   int_max_dest = (int *)rocshmem_malloc(total_size * sizeof(int));
   int_min_dest = (int *)rocshmem_malloc(total_size * sizeof(int));
-  long_source = (long *)rocshmem_malloc(total_size * sizeof(long));
+  long_source = (long *)alloc_test_source_buffer(total_size * sizeof(long));
   long_sum_dest = (long *)rocshmem_malloc(total_size * sizeof(long));
   long_max_dest = (long *)rocshmem_malloc(total_size * sizeof(long));
   long_min_dest = (long *)rocshmem_malloc(total_size * sizeof(long));

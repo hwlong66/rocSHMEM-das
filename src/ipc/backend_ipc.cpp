@@ -424,7 +424,8 @@ void IPCBackend::initIPC() {
   const auto &heap_bases{heap.get_heap_bases()};
 
   ipcImpl.ipcHostInit(my_pe, heap_bases,
-                      backend_comm);
+                      backend_comm,
+      heap.has_hdp_heap() ? &heap.get_heap_bases_hdp() : nullptr, heap.get_size_hdp());
   ipcImpl.heap_size = heap.get_size();
 }
 
@@ -432,7 +433,8 @@ void IPCBackend::initIPC(TcpBootstrap *bootstr) {
   const auto &heap_bases{heap.get_heap_bases()};
 
   ipcImpl.ipcHostInit(my_pe, heap_bases,
-                      bootstr);
+                      bootstr,
+      heap.has_hdp_heap() ? &heap.get_heap_bases_hdp() : nullptr, heap.get_size_hdp());
   ipcImpl.heap_size = heap.get_size();
 }
 

@@ -236,7 +236,7 @@ TileAllgatherTester::TileAllgatherTester(TesterArguments args)
   int total_src_size = tile_size * num_teams;
   int total_dst_size = tile_size * n_pes * num_teams;
 
-  source = (float *)rocshmem_malloc(total_src_size * sizeof(float));
+  source = (float *)alloc_test_source_buffer(total_src_size * sizeof(float));
   dest = (float *)rocshmem_malloc(total_dst_size * sizeof(float));
 
   if (!source || !dest) {

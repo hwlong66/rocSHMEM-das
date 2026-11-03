@@ -49,7 +49,7 @@ ReduceOnStreamTester::ReduceOnStreamTester(TesterArguments args)
 
   buf_size = max_msg_size * num_streams;
 
-  source_buf = static_cast<int *>(alloc_test_buffer(buf_size, args.local_buf_type));
+  source_buf = static_cast<int *>(alloc_test_source_buffer(buf_size, args.local_buf_type));
   dest_buf   = static_cast<int *>(alloc_test_buffer(buf_size));
 
   team_world_dup.resize(num_streams);

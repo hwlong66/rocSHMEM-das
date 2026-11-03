@@ -1457,7 +1457,44 @@ double Tester::timerAvgInMicroseconds() {
   return sum / num_timers;
 }
 
-void* Tester::alloc_test_buffer(size_t size, enum UserBufType user_buf_type) {
+void* Tester::alloc_test_rma_buffer(size_t size, UserBufType user_buf_type,
+                                    bool local_buffer) {
+  bool get = false;
+  switch (_type) {
+    case GetTestType:
+    case GetNBITestType:
+    case GTestType:
+    case DefaultCTXGetTestType:
+    case DefaultCTXGetNBITestType:
+    case DefaultCTXGTestType:
+    case TeamCtxGetTestType:
+    case TeamCtxGetNBITestType:
+    case WGGetTestType:
+    case WGGetNBITestType:
+    case WAVEGetTestType:
+    case WAVEGetNBITestType:
+    case FloodGetTestType:
+    case FloodGetNBITestType:
+    case FloodGTestType:
+    case TileGetContiguousTestType:
+    case TileGetWGContiguousTestType:
+    case TileGet1DTestType:
+    case TileGetWaveContiguousTestType:
+    case TileGetRowMajorTestType:
+    case TileGetColumnMajorTestType:
+    case TileGetArbitraryTestType:
+      get = true;
+      break;
+    default:
+      break;
+  }
+  bool source = get ? !local_buffer : local_buffer;
+  return alloc_test_buffer(size, user_buf_type,
+      source ? TestBufferRole::Source : TestBufferRole::Destination);
+}
+
+void* Tester::alloc_test_buffer(size_t size, UserBufType user_buf_type,
+                                TestBufferRole role) {
   void *buffer;
   int err = ROCSHMEM_SUCCESS;
 
@@ -1485,7 +1522,16 @@ void* Tester::alloc_test_buffer(size_t size, enum UserBufType user_buf_type) {
       break;
     case USER_BUF_TYPE_HEAP:
     default:
-      buffer  = rocshmem_malloc(size);
+      // Keep allocation policy here; callers only identify buffer roles.
+      // Registered user buffers above retain their requested allocation type.
+      const char* mode = getenv("ROCSHMEM_TEST_HEAP_MODE");
+      if (mode && strcmp(mode, "split") != 0 && strcmp(mode, "default") != 0) {
+        std::cerr << "ROCSHMEM_TEST_HEAP_MODE must be split or default" << std::endl;
+        rocshmem_global_exit(1);
+      }
+      bool split = !mode || strcmp(mode, "split") == 0;
+      buffer = split && role == TestBufferRole::Source
+          ? rocshmem_malloc_hdp(size) : rocshmem_malloc(size);
       if (buffer == nullptr) {
         std::cerr << "Error allocating memory from symmetric heap" << std::endl;
         std::cerr << "buffer: " << (uintptr_t) buffer << std::endl;

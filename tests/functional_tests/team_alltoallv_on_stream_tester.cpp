@@ -73,7 +73,7 @@ TeamAlltoallvOnStreamTester::TeamAlltoallvOnStreamTester(TesterArguments args)
   const size_t source_bytes = source_bytes_per_stream_ * num_streams_;
   const size_t dest_bytes = bytes_per_stream_ * num_streams_;
 
-  source_buf_ = static_cast<char *>(alloc_test_buffer(source_bytes, args.local_buf_type));
+  source_buf_ = static_cast<char *>(alloc_test_source_buffer(source_bytes, args.local_buf_type));
   dest_buf_ = static_cast<char *>(alloc_test_buffer(dest_bytes));
 
   // Allocate metadata arrays for alltoallv

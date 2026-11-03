@@ -103,8 +103,8 @@ __global__ void WaveFrontPrimitiveTest(int loop, int skip,
 WaveFrontPrimitiveTester::WaveFrontPrimitiveTester(TesterArguments args)
     : Tester(args) {
   size_t buff_size = max_msg_size * batch_size * args.num_wgs * num_warps;
-  char *local = (char *) alloc_test_buffer(buff_size, args.local_buf_type);
-  char *remote = (char *) alloc_test_buffer(buff_size);
+  char *local = (char *) alloc_test_rma_buffer(buff_size, args.local_buf_type, true);
+  char *remote = (char *) alloc_test_rma_buffer(buff_size, USER_BUF_TYPE_HEAP, false);
   CHECK_HIP(hipMalloc(&grid_psync, sizeof(int)));
 
   int max_co_resident_wgs_per_cu = 0;

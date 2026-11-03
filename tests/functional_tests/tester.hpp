@@ -226,6 +226,10 @@ typedef int ShmemContextType;
 /******************************************************************************
  * TESTER INTERFACE
  *****************************************************************************/
+// Source selects HDP in split mode; destinations and read/write objects
+// retain their original heap and object identity.
+enum class TestBufferRole { Source, Destination, ReadWrite };
+
 class Tester {
  public:
   explicit Tester(TesterArguments args);
@@ -235,7 +239,15 @@ class Tester {
 
   static std::vector<Tester *> create(TesterArguments args);
 
-  void *alloc_test_buffer(size_t size, enum UserBufType user_buf_type = USER_BUF_TYPE_HEAP);
+  void *alloc_test_buffer(size_t size,
+                          UserBufType user_buf_type = USER_BUF_TYPE_HEAP,
+                          TestBufferRole role = TestBufferRole::ReadWrite);
+  void *alloc_test_source_buffer(size_t size,
+                                 UserBufType user_buf_type = USER_BUF_TYPE_HEAP) {
+    return alloc_test_buffer(size, user_buf_type, TestBufferRole::Source);
+  }
+  void *alloc_test_rma_buffer(size_t size, UserBufType user_buf_type,
+                              bool local_buffer);
   void free_test_buffer(void *buffer, enum UserBufType user_buf_type = USER_BUF_TYPE_HEAP);
 
  protected:

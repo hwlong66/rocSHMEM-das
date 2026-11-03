@@ -61,7 +61,7 @@ GetmemOnStreamTester::GetmemOnStreamTester(TesterArguments args)
   int total_bytes = num_bytes_stream * num_streams;
   buf_size = total_bytes;
 
-  source_buf = static_cast<char *>(alloc_test_buffer(buf_size));
+  source_buf = static_cast<char *>(alloc_test_source_buffer(buf_size));
   dest_buf = static_cast<char *>(alloc_test_buffer(buf_size, args.local_buf_type));
 
   streams.resize(num_streams);

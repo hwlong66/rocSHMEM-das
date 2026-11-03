@@ -142,8 +142,8 @@ FloodTester::FloodTester(TesterArguments args) : Tester(args) {
   int num_pes {rocshmem_n_pes()};
   int my_pe {rocshmem_my_pe()};
   size_t buf_size = sizeof(uint64_t) * args.num_wgs * args.wg_size;
-  uint64_t *local = (uint64_t*)alloc_test_buffer(buf_size * num_pes, args.local_buf_type);
-  uint64_t *remote = (uint64_t*)alloc_test_buffer(buf_size * num_pes);
+  uint64_t *local = (uint64_t*)alloc_test_rma_buffer(buf_size * num_pes, args.local_buf_type, true);
+  uint64_t *remote = (uint64_t*)alloc_test_rma_buffer(buf_size * num_pes, USER_BUF_TYPE_HEAP, false);
 
   switch (_type) {
     case FloodPutTestType:

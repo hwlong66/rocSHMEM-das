@@ -23,7 +23,8 @@ using namespace rocshmem;
 template <typename T>
 class SymmetricTensorBuffer {
 public:
-    SymmetricTensorBuffer() = default;
+    SymmetricTensorBuffer(Tester& owner, bool local)
+        : owner_(owner), local_(local) {}
     ~SymmetricTensorBuffer() { dealloc(); }
 
     void reset(size_t capacity) {
@@ -45,13 +46,15 @@ private:
     }
 
     void alloc(size_t size) {
-        _data = (T*)rocshmem_malloc(size);
+        _data = (T*)owner_.alloc_test_rma_buffer(size, USER_BUF_TYPE_HEAP, local_);
         if (!_data) {
             std::cerr << "rocshmem_malloc failed for " << size << " bytes\n";
             exit(EXIT_FAILURE);
         }
     }
 
+    Tester& owner_;
+    bool local_;
     T* _data = nullptr;
     size_t _capacity = 0;
 };
@@ -135,6 +138,12 @@ __global__ void TileRMATest(int loop, int skip, long long int *start_time,
 
   // Calculate base offset for this thread/wave/wg's data region
   int matrix_size = tile_extent_0 * tile_extent_1;
+  // Keep each thread's physical span consistent with allocation/verification.
+  if constexpr (Type == TilePutRowMajorTestType || Type == TileGetRowMajorTestType) {
+    matrix_size = tile_extent_0 * (2 * tile_extent_1);
+  } else if constexpr (Type == TilePutArbitraryTestType || Type == TileGetArbitraryTestType) {
+    matrix_size = tile_extent_0 * 257;
+  }
   int offset;
 
   // For collective operations, all threads in the collective share the same tile
@@ -322,12 +331,12 @@ TileRMATester::TileRMATester(TesterArguments args) : Tester(args) {
 
   // For now, allocate one buffer per thread to keep it simple
   // TODO: Optimize to allocate only num_tiles (wave/wg count) for collective ops
-  size_t total_threads = args.num_wgs * args.num_threads;
+  size_t total_threads = args.num_wgs * this->args.wg_size;
   size_t num_elements = buffer_elements_per_thread * total_threads;
 
   // Allocate using rocshmem symmetric heap
-  local_alloc = new SymmetricTensorBuffer<float>();
-  remote_alloc = new SymmetricTensorBuffer<float>();
+  local_alloc = new SymmetricTensorBuffer<float>(*this, true);
+  remote_alloc = new SymmetricTensorBuffer<float>(*this, false);
 
   local_alloc->reset(num_elements);
   remote_alloc->reset(num_elements);
@@ -440,7 +449,7 @@ void TileRMATester::resetBuffers(uint64_t size) {
       break;
   }
 
-  size_t total_threads = args.num_wgs * args.num_threads;
+  size_t total_threads = args.num_wgs * this->args.wg_size;
   size_t buff_size = buffer_elements_per_thread * total_threads * sizeof(float);
   memset(dest, 0, buff_size);
 }
@@ -567,7 +576,7 @@ void TileRMATester::verifyResults(uint64_t size) {
       case TilePutWaveContiguousTestType:
       case TileGetWaveContiguousTestType:
         // Wave-collective: one tile per wave
-        num_tiles_transferred = (args.num_wgs * args.num_threads) / wf_size;
+        num_tiles_transferred = (args.num_wgs * this->args.wg_size) / wf_size;
         break;
       case TilePutWGContiguousTestType:
       case TileGetWGContiguousTestType:
@@ -576,7 +585,7 @@ void TileRMATester::verifyResults(uint64_t size) {
         break;
       default:
         // Thread-level: one tile per thread
-        num_tiles_transferred = args.num_wgs * args.num_threads;
+        num_tiles_transferred = args.num_wgs * this->args.wg_size;
         break;
     }
 

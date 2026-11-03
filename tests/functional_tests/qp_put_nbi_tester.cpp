@@ -100,7 +100,7 @@ QpPutNbiTester::QpPutNbiTester(TesterArguments args) : Tester(args) {
     }
     exit(1);
   }
-  s_buf = (char *)alloc_test_buffer(max_msg_size);
+  s_buf = (char *)alloc_test_source_buffer(max_msg_size);
   r_buf = (char *)alloc_test_buffer(max_msg_size * batch_size);
 }
 

@@ -140,7 +140,7 @@ QpPingPongTester::QpPingPongTester(TesterArguments args) : Tester(args) {
     exit(1);
   }
   r_buf = (int *)alloc_test_buffer(sizeof(int) * args.num_wgs);
-  data_s_buf = (char *)alloc_test_buffer(max_msg_size * args.num_wgs);
+  data_s_buf = (char *)alloc_test_source_buffer(max_msg_size * args.num_wgs);
   data_r_buf = (char *)alloc_test_buffer(max_msg_size * args.num_wgs);
   sig_addr = (uint64_t *)alloc_test_buffer(sizeof(uint64_t) * args.num_wgs);
   rtt_factor = 2;

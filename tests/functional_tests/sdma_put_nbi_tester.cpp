@@ -97,7 +97,7 @@ __global__ void SdmaPutNbiTest(int loop, int skip,
  * HOST TESTER CLASS METHODS
  *****************************************************************************/
 SdmaPutNbiTester::SdmaPutNbiTester(TesterArguments args) : Tester(args) {
-  s_buf = (char *)alloc_test_buffer(max_msg_size);
+  s_buf = (char *)alloc_test_source_buffer(max_msg_size);
   r_buf = (char *)alloc_test_buffer(max_msg_size * batch_size);
 }
 

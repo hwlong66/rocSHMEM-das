@@ -70,7 +70,7 @@ PutmemOnStreamTester::PutmemOnStreamTester(TesterArguments args)
   int total_bytes = num_bytes_stream * num_streams;
   buf_size = total_bytes;
 
-  source_buf = (char *) alloc_test_buffer(buf_size, args.local_buf_type);
+  source_buf = (char *) alloc_test_source_buffer(buf_size, args.local_buf_type);
   dest_buf = (char *) alloc_test_buffer(buf_size);
 
   streams.resize(num_streams);

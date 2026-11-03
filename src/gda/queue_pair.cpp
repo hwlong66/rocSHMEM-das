@@ -383,7 +383,7 @@ __device__ void QueuePair::put_nbi_single(void *dest, const void *source,
   uintptr_t dst = reinterpret_cast<uintptr_t>(dest);
   uint32_t src_lkey = (static_cast<int32_t>(length) <= static_cast<int32_t>(inline_threshold))
       ? 0 : get_lkey(src);
-  post_wqe_rma_single(length, src, src_lkey, dst, rkey,
+  post_wqe_rma_single(length, src, src_lkey, dst, get_rkey(dst),
                        gda_op_rdma_write, ring_db);
 }
 
@@ -435,27 +435,27 @@ __device__ void QueuePair::get_nbi(void *dest, const void *source,
 __device__ int64_t QueuePair::atomic_cas(void *dest, int64_t atomic_data,
     int64_t atomic_cmp, ActiveWFInfo &wf_info) {
   uintptr_t dst = reinterpret_cast<uintptr_t>(dest);
-  return post_wqe_amo(dst, rkey, gda_op_atomic_cs, atomic_data,
+  return post_wqe_amo(dst, get_rkey(dst), gda_op_atomic_cs, atomic_data,
                       atomic_cmp, wf_info, true);
 }
 
 __device__ int64_t QueuePair::atomic_cas_nofetch(void *dest,
     int64_t atomic_data, int64_t atomic_cmp, ActiveWFInfo &wf_info) {
   uintptr_t dst = reinterpret_cast<uintptr_t>(dest);
-  return post_wqe_amo(dst, rkey, gda_op_atomic_cs, atomic_data,
+  return post_wqe_amo(dst, get_rkey(dst), gda_op_atomic_cs, atomic_data,
                       atomic_cmp, wf_info);
 }
 
 __device__ int64_t QueuePair::atomic_fetch_add(void *dest, int64_t value,
     ActiveWFInfo &wf_info) {
   uintptr_t dst = reinterpret_cast<uintptr_t>(dest);
-  return post_wqe_amo(dst, rkey, gda_op_atomic_fa, value, 0, wf_info, true);
+  return post_wqe_amo(dst, get_rkey(dst), gda_op_atomic_fa, value, 0, wf_info, true);
 }
 
 __device__ void QueuePair::atomic_add(void *dest, int64_t value,
     ActiveWFInfo &wf_info) {
   uintptr_t dst = reinterpret_cast<uintptr_t>(dest);
-  post_wqe_amo(dst, rkey, gda_op_atomic_fa, value, 0, wf_info);
+  post_wqe_amo(dst, get_rkey(dst), gda_op_atomic_fa, value, 0, wf_info);
 }
 
 __device__ void QueuePair::atomic_nofetch_dp(void *dest, int64_t atomic_data, int64_t atomic_cmp, int pe) {
@@ -519,7 +519,7 @@ __device__ void QueuePair::get_nbi(void *dest, uint32_t lkey,
 
 __device__ void QueuePair::atomic_add_single(void *dest, int64_t value) {
   uintptr_t dst = reinterpret_cast<uintptr_t>(dest);
-  post_wqe_amo_single(dst, rkey, gda_op_atomic_fa, value, 0);
+  post_wqe_amo_single(dst, get_rkey(dst), gda_op_atomic_fa, value, 0);
 }
 
 int QueuePair::buffer_register(uintptr_t addr, size_t length) {

@@ -37,6 +37,8 @@
 #include "util.hpp"
 #include "bootstrap/bootstrap.hpp"
 #include "atomic.hpp"
+#include "memory/heap_view.hpp"
+#include "memory/hip_allocator.hpp"
 #include "sdma_policy.hpp"
 
 namespace rocshmem {
@@ -84,6 +86,12 @@ class IpcOnImpl {
   int shm_size{0};
 
   char **ipc_bases{nullptr};
+  char **ipc_bases_hdp{nullptr};
+  size_t hdp_heap_size{0};
+
+  __host__ __device__ char* remote_ptr(const void* ptr, int from, int to) const {
+    return heap_translate(ptr, from, to, ipc_bases, ipc_bases_hdp, hdp_heap_size);
+  }
 
   /**
    * @brief Size in bytes of the local symmetric heap.
@@ -113,10 +121,12 @@ class IpcOnImpl {
   int ipc_stride{0};    // 0 = pattern invalid
 
   __host__ void ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                            MPI_Comm thread_comm);
+                            MPI_Comm thread_comm, const HEAP_BASES_T* hdp_bases = nullptr,
+                            size_t hdp_size = 0, HIPAllocator* allocator_override = nullptr);
 
   __host__ void ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                            TcpBootstrap *bootstrap);
+                            TcpBootstrap *bootstrap, const HEAP_BASES_T* hdp_bases = nullptr,
+                            size_t hdp_size = 0, HIPAllocator* allocator_override = nullptr);
 
   __host__ void ipcHostStop();
 
@@ -159,6 +169,8 @@ class IpcOnImpl {
 
   void initFrom(const IpcOnImpl &other) {
     ipc_bases = other.ipc_bases;
+    ipc_bases_hdp = other.ipc_bases_hdp;
+    hdp_heap_size = other.hdp_heap_size;
     heap_size = other.heap_size;
     shm_size = other.shm_size;
     shm_rank = other.shm_rank;
@@ -188,6 +200,10 @@ class IpcOnImpl {
      */
     if (addr - heap_base < constmem.heap_size) {
       return ipc_bases[pe] + (addr - heap_base);
+    }
+
+    if (ipc_bases_hdp && addr - reinterpret_cast<uintptr_t>(ipc_bases_hdp[shm_rank]) < hdp_heap_size) {
+      return ipc_bases_hdp[pe] + (addr - reinterpret_cast<uintptr_t>(ipc_bases_hdp[shm_rank]));
     }
 
     /* Otherwise it may belong to a symmetrically-registered user buffer. */
@@ -390,10 +406,12 @@ class IpcSdmaImpl : public IpcOnImpl {
   }
 
   __host__ void ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                            MPI_Comm thread_comm);
+                            MPI_Comm thread_comm, const HEAP_BASES_T* hdp_bases = nullptr,
+                            size_t hdp_size = 0, HIPAllocator* allocator_override = nullptr);
 
   __host__ void ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                            TcpBootstrap *bootstrap);
+                            TcpBootstrap *bootstrap, const HEAP_BASES_T* hdp_bases = nullptr,
+                            size_t hdp_size = 0, HIPAllocator* allocator_override = nullptr);
 
   __host__ void ipcHostStop();
 
@@ -493,6 +511,12 @@ class IpcOffImpl {
   uint32_t shm_size{0};
 
   char **ipc_bases{nullptr};
+  char **ipc_bases_hdp{nullptr};
+  size_t hdp_heap_size{0};
+
+  __host__ __device__ char* remote_ptr(const void* ptr, int from, int to) const {
+    return heap_translate(ptr, from, to, ipc_bases, ipc_bases_hdp, hdp_heap_size);
+  }
 
   size_t heap_size{0};
 
@@ -509,10 +533,12 @@ class IpcOffImpl {
   }
 
   __host__ void ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                            MPI_Comm thread_comm) {}
+                            MPI_Comm thread_comm, const HEAP_BASES_T* hdp_bases = nullptr,
+                            size_t hdp_size = 0, HIPAllocator* allocator_override = nullptr) {}
 
   __host__ void ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                            TcpBootstrap *bootstrap){}
+                            TcpBootstrap *bootstrap, const HEAP_BASES_T* hdp_bases = nullptr,
+                            size_t hdp_size = 0, HIPAllocator* allocator_override = nullptr){}
 
   __host__ void ipcHostStop() {}
 

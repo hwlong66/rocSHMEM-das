@@ -311,6 +311,7 @@ __host__ void HostInterface::amo_cas(void* dst, T value, T cond, int pe,
 template <typename T>
 __host__ T HostInterface::amo_fetch_add(void* dst, T value, int pe,
                                         WindowInfo* window_info) {
+  window_info = window_for(dst, window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();
@@ -340,6 +341,7 @@ __host__ T HostInterface::amo_fetch_add(void* dst, T value, int pe,
 template <typename T>
 __host__ T HostInterface::amo_fetch_cas(void* dst, T value, T cond, int pe,
                                         WindowInfo* window_info) {
+  window_info = window_for(dst, window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();
@@ -682,6 +684,7 @@ __host__ inline int HostInterface::test_and_compare(MPI_Aint offset,
 template <typename T>
 __host__ void HostInterface::wait_until(T *ivars, int cmp, T val,
                                         WindowInfo* window_info) {
+  window_info = window_for(ivars, window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();
@@ -939,6 +942,7 @@ __host__ size_t HostInterface::wait_until_some_vector(T* ivars, size_t nelems,
 template <typename T>
 __host__ int HostInterface::test(T* ivars, int cmp, T val,
                                  WindowInfo* window_info) {
+  window_info = window_for(ivars, window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();

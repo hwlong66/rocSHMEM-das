@@ -83,9 +83,9 @@ class CommunicatorMPI {
   /**
    * @brief Performs MPI_Allgather on recvbuf
    */
-  void allgather(void* recvbuf) {
-    mpilib_ftable_.Allgather(MPI_IN_PLACE, sizeof(void*), MPI_CHAR, recvbuf,
-                             sizeof(void*), MPI_CHAR, comm_);
+  void allgather(void* recvbuf, size_t bytes = sizeof(void*)) {
+    mpilib_ftable_.Allgather(MPI_IN_PLACE, bytes, MPI_CHAR, recvbuf,
+                             bytes, MPI_CHAR, comm_);
   }
 
   /**
@@ -153,8 +153,8 @@ class CommunicatorTCP {
   /**
    * @brief Performs MPI_Allgather on recvbuf
    */
-  void allgather(void* recvbuf) {
-    bootstrap_->allGather(recvbuf, sizeof(void*));
+  void allgather(void* recvbuf, size_t bytes = sizeof(void*)) {
+    bootstrap_->allGather(recvbuf, bytes);
   }
 
   /**
@@ -206,15 +206,15 @@ class RemoteHeapInfo {
    * @param[in] The total number of processing elements
    */
   RemoteHeapInfo(char* heap_ptr, size_t heap_size,
-                 MPI_Comm comm)
+                 MPI_Comm comm, bool* split_heap = nullptr)
     : communicator_{heap_ptr, heap_size, comm} {
-    init(heap_ptr, heap_size);
+    init(heap_ptr, heap_size, split_heap);
   }
 
   RemoteHeapInfo(char* heap_ptr, size_t heap_size,
-                 TcpBootstrap* bootstrap)
+                 TcpBootstrap* bootstrap, bool* split_heap = nullptr)
     : communicator_{heap_ptr, heap_size, bootstrap} {
-    init(heap_ptr, heap_size);
+    init(heap_ptr, heap_size, split_heap);
   }
 
   /**
@@ -261,13 +261,27 @@ class RemoteHeapInfo {
   /**
    ** @brief common initialization code
    */
-  void init(char* heap_ptr, [[maybe_unused]] size_t heap_size)  {
+  void init(char* heap_ptr, [[maybe_unused]] size_t heap_size, bool* split_heap) {
     heap_bases_.resize(communicator_.num_pes());
     for (auto& base : heap_bases_) {
       base = nullptr;
     }
-    heap_bases_[communicator_.my_pe()] = heap_ptr;
-    communicator_.allgather(heap_bases_.data());
+    if (split_heap) {
+      // Piggyback capability negotiation on the existing base-address
+      // exchange. No additional collective is needed for the flag.
+      struct HeapMetadata { char* base; size_t flags; };
+      std::vector<HeapMetadata> metadata(communicator_.num_pes());
+      metadata[communicator_.my_pe()] = {heap_ptr, *split_heap ? size_t{1} : size_t{0}};
+      communicator_.allgather(metadata.data(), sizeof(HeapMetadata));
+      *split_heap = false;
+      for (int pe = 0; pe < communicator_.num_pes(); ++pe) {
+        heap_bases_[pe] = metadata[pe].base;
+        *split_heap = *split_heap || (metadata[pe].flags & 1);
+      }
+    } else {
+      heap_bases_[communicator_.my_pe()] = heap_ptr;
+      communicator_.allgather(heap_bases_.data());
+    }
 
     device_heap_bases_ = heap_bases_.data();
   }

@@ -292,8 +292,7 @@ __device__ uint64_t IPCContext::get_p2p_ptr(void *dest, int rank, int dst_rank){
   if (node_src != node_dst) {
     return 0;
   } else {
-    uint64_t L_offset = reinterpret_cast<char *>(dest) - ipcImpl_.ipc_bases[rank % local_ranks];
-    char* dst_ptr = ipcImpl_.ipc_bases[dst_rank % local_ranks] + L_offset;
+    char* dst_ptr = ipcImpl_.remote_ptr(reinterpret_cast<char *>(dest), rank % local_ranks, dst_rank % local_ranks);
     return reinterpret_cast<uint64_t>(dst_ptr);
   }
 }

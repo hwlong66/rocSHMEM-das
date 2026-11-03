@@ -379,6 +379,9 @@ class QueuePair {
     if (is_ptr_in_range(base_heap, base_heap_size, addr)) {
       return {remote_heap_base + (addr - base_heap), rkey};
     }
+    if (hdp_heap_size && is_ptr_in_range(base_heap_hdp, hdp_heap_size, addr)) {
+      return {remote_heap_hdp + (addr - base_heap_hdp), rkey_hdp};
+    }
     int n = symm_count ? *symm_count : 0;
     for (int i = 0; i < n; ++i) {
       uintptr_t local_base = symm_entries[i].local_base;
@@ -412,6 +415,9 @@ class QueuePair {
     }
 
     /* Get the correct lkey for a registered symmetric buffer */
+    if (hdp_heap_size && is_ptr_in_range(base_heap_hdp, hdp_heap_size, addr)) {
+      return lkey_hdp;
+    }
     int n = symm_count ? *symm_count : 0;
     for (int i = 0; i < n; ++i) {
       if (is_ptr_in_range(symm_entries[i].local_base, symm_entries[i].length,
@@ -721,6 +727,15 @@ class QueuePair {
 
   char dev_name[24];
   uint32_t qp_num{0};
+  uintptr_t base_heap_hdp{0};
+  uintptr_t remote_heap_hdp{0};
+  size_t hdp_heap_size{0};
+  uint32_t lkey_hdp{0};
+  uint32_t rkey_hdp{0};
+  __device__ uint32_t get_rkey(uintptr_t addr) const {
+    return hdp_heap_size && is_ptr_in_range(remote_heap_hdp, hdp_heap_size, addr)
+        ? rkey_hdp : rkey;
+  }
   uint32_t rkey{0};
   uint32_t lkey{0};
 

@@ -345,7 +345,7 @@ FenceOrderingTester::FenceOrderingTester(TesterArguments args)
   int total_waves = args.num_wgs * waves_per_wg;
   size_t r_buf_size = (size_t)total_waves * max_msg_size;
   size_t s_buf_size = (size_t)args.num_wgs * max_msg_size;
-  s_buf = (char *)rocshmem_malloc(s_buf_size);
+  s_buf = (char *)alloc_test_source_buffer(s_buf_size);
   r_buf = (char *)rocshmem_malloc(r_buf_size);
   // Per-wave data flags + ack flags: 2 * total_waves entries
   signal = (uint64_t *)rocshmem_malloc(2 * total_waves * sizeof(uint64_t));

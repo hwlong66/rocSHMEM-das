@@ -454,6 +454,16 @@ private:
     return xdp_size > 0;
   }
 
+public:
+  static bool uses_xdp() {
+#if defined(HIP_VERSION_PATCH) && (HIP_VERSION_PATCH >= 25521)
+    return is_xdp_enabled();
+#else
+    return false;
+#endif
+  }
+
+private:
   static unsigned int get_malloc_flags() {
   #if defined(HIP_VERSION_PATCH) && (HIP_VERSION_PATCH >= 25521)
     if (is_xdp_enabled()) {

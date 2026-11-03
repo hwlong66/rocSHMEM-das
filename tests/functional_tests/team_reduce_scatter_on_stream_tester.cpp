@@ -51,7 +51,7 @@ TeamReduceScatterOnStreamTester::TeamReduceScatterOnStreamTester(
   const size_t source_bytes = source_elements_per_stream_ * num_streams_ * sizeof(int);
   const size_t dest_bytes = elements_per_stream_ * num_streams_ * sizeof(int);
 
-  source_buf_ = static_cast<int *>(alloc_test_buffer(source_bytes, args.local_buf_type));
+  source_buf_ = static_cast<int *>(alloc_test_source_buffer(source_bytes, args.local_buf_type));
   dest_buf_ = static_cast<int *>(alloc_test_buffer(dest_bytes));
 
   // Initialize streams and events

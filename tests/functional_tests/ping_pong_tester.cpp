@@ -113,8 +113,8 @@ __global__ void PingPongTest(int loop, int skip, long long int *start_time,
  *****************************************************************************/
 PingPongTester::PingPongTester(TesterArguments args) : Tester(args) {
   r_buf = (int *)alloc_test_buffer(sizeof(int) * args.num_wgs);
-  s_buf = (int *)alloc_test_buffer(sizeof(int) * args.num_wgs);
-  data_s_buf = (char *)alloc_test_buffer(max_msg_size * args.num_wgs);
+  s_buf = (int *)alloc_test_source_buffer(sizeof(int) * args.num_wgs);
+  data_s_buf = (char *)alloc_test_source_buffer(max_msg_size * args.num_wgs);
   data_r_buf = (char *)alloc_test_buffer(max_msg_size * args.num_wgs);
   sig_addr = (uint64_t *)alloc_test_buffer(sizeof(uint64_t) * args.num_wgs);
   rtt_factor = 2;

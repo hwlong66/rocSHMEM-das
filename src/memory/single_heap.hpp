@@ -47,7 +47,10 @@ class SingleHeap {
   /**
    * @brief Primary constructor and destructor
    */
-  SingleHeap();
+  explicit SingleHeap(bool hdp = false);
+  void enable_hdp_heap();
+  bool has_hdp_heap() const { return hdp_heap_ != nullptr; }
+  SingleHeap& hdp_heap() { return hdp_heap_ ? *hdp_heap_ : *this; }
   ~SingleHeap();
 
   /**
@@ -156,6 +159,7 @@ class SingleHeap {
   /**
    * @brief Heap memory object
    */
+  SingleHeap *hdp_heap_{nullptr};
   HeapMemory *heap_mem_{nullptr};
   /**
    * @brief Allocation strategy object
@@ -165,6 +169,7 @@ class SingleHeap {
    * @brief Allocator used to back the heap memory
    */
   HIPAllocator *allocator_{nullptr};
+  HIPAllocator hdp_allocator_{hipExtMallocWithFlags, hipFree, hipDeviceMallocFinegrained};
 };
 
 }  // namespace rocshmem

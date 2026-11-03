@@ -56,14 +56,19 @@ __host__ HostContextWindowInfo::HostContextWindowInfo(MPI_Comm comm_world,
                                                       SymmetricHeap* heap) {
   window_info_ =
       new WindowInfoMPI(comm_world, heap->get_local_heap_base(), heap->get_size());
+  if (heap->has_hdp_heap())
+    window_info_hdp_ = new WindowInfoMPI(comm_world, heap->get_local_heap_base_hdp(), heap->get_size_hdp());
 }
 
 __host__ HostContextWindowInfo::HostContextWindowInfo(SymmetricHeap* heap) {
   window_info_ =
       new WindowInfo(heap->get_local_heap_base(), heap->get_size());
+  if (heap->has_hdp_heap())
+    window_info_hdp_ = new WindowInfo(heap->get_local_heap_base_hdp(), heap->get_size_hdp());
 }
 
 __host__ HostContextWindowInfo::~HostContextWindowInfo() {
+  delete window_info_hdp_;
   delete window_info_;
 }
 
@@ -111,6 +116,7 @@ int HostInterface::find_win_info_in_pool(WindowInfo* window_info) {
 __host__ HostInterface::HostInterface(HdpPolicy* hdp_policy,
                                       MPI_Comm rocshmem_comm,
                                       SymmetricHeap* heap) {
+  has_hdp_heap_ = heap->has_hdp_heap();
   /*
    * Duplicate a communicator from roc_shem's comm
    * world for the host interface
@@ -167,6 +173,7 @@ __host__ void HostInterface::create_hdp_window() {
 __host__ HostInterface::HostInterface(HdpPolicy* hdp_policy,
                                       TcpBootstrap *bootstr,
                                       SymmetricHeap* heap) {
+  has_hdp_heap_ = heap->has_hdp_heap();
   host_bootstrap_ = bootstr;
   my_pe_ = bootstr->getRank();
   num_pes_ = bootstr->getNranks();
@@ -239,10 +246,34 @@ __host__ RcclCommContext* HostInterface::get_rccl_comm(MPI_Comm mpi_comm,
   return context;
 }
 #endif
+WindowInfo* HostInterface::window_for(const void* ptr, WindowInfo* primary) {
+  if (!has_hdp_heap_) return primary;
+  for (size_t i = 0; i < envvar::max_num_host_contexts; ++i) {
+    auto* hdp = host_window_context_pool_[i]->get_hdp();
+    if (host_window_context_pool_[i]->get() == primary && hdp &&
+        heap_contains(ptr, hdp->get_start(),
+            reinterpret_cast<uintptr_t>(hdp->get_end()) - reinterpret_cast<uintptr_t>(hdp->get_start())))
+      return hdp;
+  }
+  return primary;
+}
+
+void HostInterface::complete_hdp(WindowInfo* primary) {
+  if (!has_hdp_heap_) return;
+  for (size_t i = 0; i < envvar::max_num_host_contexts; ++i) {
+    if (host_window_context_pool_[i]->get() != primary) continue;
+    auto* hdp = dynamic_cast<WindowInfoMPI*>(host_window_context_pool_[i]->get_hdp());
+    if (hdp) {
+      complete_all(hdp->get_win());
+    }
+    return;
+  }
+}
 
 __host__ void HostInterface::putmem_nbi(void* dest, const void* source,
                                         size_t nelems, int pe,
                                         WindowInfo* window_info) {
+  window_info = window_for(dest, window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();
@@ -253,6 +284,7 @@ __host__ void HostInterface::putmem_nbi(void* dest, const void* source,
 __host__ void HostInterface::getmem_nbi(void* dest, const void* source,
                                         size_t nelems, int pe,
                                         WindowInfo* window_info) {
+  window_info = window_for(source, window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();
@@ -263,6 +295,7 @@ __host__ void HostInterface::getmem_nbi(void* dest, const void* source,
 __host__ void HostInterface::putmem(void* dest, const void* source,
                                     size_t nelems, int pe,
                                     WindowInfo* window_info) {
+  window_info = window_for(dest, window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();
@@ -275,6 +308,7 @@ __host__ void HostInterface::putmem(void* dest, const void* source,
 __host__ void HostInterface::getmem(void* dest, const void* source,
                                     size_t nelems, int pe,
                                     WindowInfo* window_info) {
+  window_info = window_for(source, window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();
@@ -291,6 +325,7 @@ __host__ void HostInterface::getmem(void* dest, const void* source,
 }
 
 __host__ void HostInterface::fence(WindowInfo* window_info) {
+  complete_hdp(window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();
@@ -313,6 +348,7 @@ __host__ void HostInterface::fence(WindowInfo* window_info) {
 }
 
 __host__ void HostInterface::quiet(WindowInfo* window_info) {
+  complete_hdp(window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (!window_info_mpi) {
     abort();
@@ -327,6 +363,7 @@ __host__ void HostInterface::quiet(WindowInfo* window_info) {
 }
 
 __host__ void HostInterface::sync_all(WindowInfo* window_info) {
+  complete_hdp(window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (window_info_mpi) {
     mpilib_ftable_.Win_sync(window_info_mpi->get_win());
@@ -348,6 +385,7 @@ __host__ void HostInterface::sync_all(WindowInfo* window_info) {
 }
 
 __host__ void HostInterface::sync(rocshmem_team_t team, WindowInfo* window_info) {
+  complete_hdp(window_info);
   if (team == ROCSHMEM_TEAM_INVALID) {
     return;
   }
@@ -367,6 +405,7 @@ __host__ void HostInterface::sync(rocshmem_team_t team, WindowInfo* window_info)
 }
 
 __host__ void HostInterface::barrier_all(WindowInfo* window_info) {
+  complete_hdp(window_info);
   WindowInfoMPI* window_info_mpi = dynamic_cast<WindowInfoMPI*>(window_info);
   if (window_info_mpi) {
     complete_all(window_info_mpi->get_win());
@@ -389,6 +428,7 @@ __host__ void HostInterface::barrier_all(WindowInfo* window_info) {
 
 __host__ void HostInterface::barrier(rocshmem_team_t team,
                                      WindowInfo* window_info) {
+  complete_hdp(window_info);
   if (team == ROCSHMEM_TEAM_INVALID) {
     return;
   }

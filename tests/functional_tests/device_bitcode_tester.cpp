@@ -117,7 +117,7 @@ void DeviceBitcodeTester::launch(const char* kernel, void** args) {
 template <typename T>
 void DeviceBitcodeTester::run_rma_test(const char* label, const char* kernel,
                                        int count, T scale, T offset) {
-  T* sym_src = static_cast<T*>(alloc_test_buffer(count * sizeof(T)));
+  T* sym_src = static_cast<T*>(alloc_test_source_buffer(count * sizeof(T)));
   T* sym_dst = static_cast<T*>(alloc_test_buffer(count * sizeof(T)));
   // Use symmetric heap for get result so GDA can write to it (only heap is
   // registered for RDMA); hipMalloc'd dest would never receive the get.
@@ -257,7 +257,7 @@ void DeviceBitcodeTester::execute() {
 
   { // test_typed_put_signal
     constexpr int COUNT = 4;
-    int* sym_src = static_cast<int*>(alloc_test_buffer(COUNT * sizeof(int)));
+    int* sym_src = static_cast<int*>(alloc_test_source_buffer(COUNT * sizeof(int)));
     int* sym_dst = static_cast<int*>(alloc_test_buffer(COUNT * sizeof(int)));
     uint64_t* sym_sig = static_cast<uint64_t*>(alloc_test_buffer(sizeof(uint64_t)));
 
@@ -419,7 +419,7 @@ void DeviceBitcodeTester::execute() {
 
   { // test_int_sum_reduce: source[i]=1 on every PE, expect dest[i]==n_pes
     constexpr int COUNT = 4;
-    int* sym_src = static_cast<int*>(rocshmem_malloc(COUNT * sizeof(int)));
+    int* sym_src = static_cast<int*>(alloc_test_source_buffer(COUNT * sizeof(int)));
     int* sym_dst = static_cast<int*>(rocshmem_malloc(COUNT * sizeof(int)));
     for (int i = 0; i < COUNT; i++) {
       sym_src[i] = 1;

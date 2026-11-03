@@ -38,12 +38,13 @@
 namespace rocshmem {
 
 __host__ void IpcOnImpl::ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                                     MPI_Comm thread_comm) {
+                                     MPI_Comm thread_comm, const HEAP_BASES_T* hdp_bases,
+                                     size_t hdp_size, HIPAllocator* allocator_override) {
   MPI_Comm shmcomm;
   std::vector<int> ipc_ranks;
 
   // Check if we should use pod-based detection (for VMM Fabric allocator)
-  HIPAllocator *allocator = get_default_allocator();
+  HIPAllocator *allocator = allocator_override ? allocator_override : get_default_allocator();
   bool use_pod_detection = (allocator->get_type() == AllocatorTypeVMMFabric);
 
   if (use_pod_detection) {
@@ -186,12 +187,22 @@ __host__ void IpcOnImpl::ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
       mpilib_ftable_.Group_free(&thread_grp);
     }
   }
+  if (hdp_bases) {
+    HIPAllocator hdp_allocator;
+    IpcOnImpl hdp;
+    hdp.ipcHostInit(my_pe, *hdp_bases, thread_comm, nullptr, 0, &hdp_allocator);
+    ipc_bases_hdp = hdp.ipc_bases;
+    hdp_heap_size = hdp_size;
+    if (hdp.pes_with_ipc_avail) CHECK_HIP(hipFree(hdp.pes_with_ipc_avail));
+  }
+
 }
 
 __host__ void IpcOnImpl::ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                                     TcpBootstrap *bootstr) {
+                                     TcpBootstrap * bootstr, const HEAP_BASES_T* hdp_bases,
+                                     size_t hdp_size, HIPAllocator* allocator_override) {
   // Check if we should use pod-based detection (for VMM Fabric allocator)
-  HIPAllocator *allocator = get_default_allocator();
+  HIPAllocator *allocator = allocator_override ? allocator_override : get_default_allocator();
   bool use_pod_detection = (allocator->get_type() == AllocatorTypeVMMFabric);
 
   // For VMM_FABRIC, use pod-based IPC capability detection; otherwise use local ranks
@@ -269,10 +280,26 @@ __host__ void IpcOnImpl::ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
     CHECK_HIP(hipMemcpy(pes_with_ipc_avail, shm_ranks.data(), shm_size * sizeof(int), hipMemcpyHostToDevice));
   }
 
+  if (hdp_bases) {
+    HIPAllocator hdp_allocator;
+    IpcOnImpl hdp;
+    hdp.ipcHostInit(my_pe, *hdp_bases, bootstr, nullptr, 0, &hdp_allocator);
+    ipc_bases_hdp = hdp.ipc_bases;
+    hdp_heap_size = hdp_size;
+    if (hdp.pes_with_ipc_avail) CHECK_HIP(hipFree(hdp.pes_with_ipc_avail));
+  }
+
 }
 
 __host__ void IpcOnImpl::ipcHostStop() {
   HIPAllocator *allocator = get_default_allocator();
+  if (ipc_bases_hdp) {
+    HIPAllocator hdp_allocator;
+    for (int i = 0; i < shm_size; ++i) {
+      if (i != shm_rank) CHECK_HIP(hdp_allocator.CloseIpcHandle(ipc_bases_hdp[i]));
+    }
+    CHECK_HIP(hipFree(ipc_bases_hdp));
+  }
 
   for (int i = 0; i < shm_size; i++) {
     if (i != shm_rank) {
@@ -290,14 +317,16 @@ __host__ void IpcOnImpl::ipcHostStop() {
 #if defined(USE_SDMA)
 
 __host__ void IpcSdmaImpl::ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                                       MPI_Comm thread_comm) {
-  IpcOnImpl::ipcHostInit(my_pe, heap_bases, thread_comm);
+                                       MPI_Comm thread_comm, const HEAP_BASES_T* hdp_bases,
+                                     size_t hdp_size, HIPAllocator* allocator_override) {
+  IpcOnImpl::ipcHostInit(my_pe, heap_bases, thread_comm, hdp_bases, hdp_size, allocator_override);
   sdmaImpl_.sdmaHostInit(my_pe, shm_size, shm_rank);
 }
 
 __host__ void IpcSdmaImpl::ipcHostInit(int my_pe, const HEAP_BASES_T &heap_bases,
-                                       TcpBootstrap *bootstrap) {
-  IpcOnImpl::ipcHostInit(my_pe, heap_bases, bootstrap);
+                                       TcpBootstrap *bootstrap, const HEAP_BASES_T* hdp_bases,
+                                     size_t hdp_size, HIPAllocator* allocator_override) {
+  IpcOnImpl::ipcHostInit(my_pe, heap_bases, bootstrap, hdp_bases, hdp_size, allocator_override);
   sdmaImpl_.sdmaHostInit(my_pe, shm_size, shm_rank);
 }
 

@@ -41,6 +41,7 @@
 #include "hdp_policy.hpp"
 #include "memory/symmetric_heap.hpp"
 #include "memory/window_info.hpp"
+#include "memory/heap_view.hpp"
 #include "bootstrap/bootstrap.hpp"
 #include "mpi_instance.hpp"
 
@@ -76,6 +77,7 @@ class HostContextWindowInfo {
    * @return WindowInfo pointer
    */
   WindowInfo* get() { return window_info_; }
+  WindowInfo* get_hdp() { return window_info_hdp_; }
 
   /**
    * @brief Mark the window info as available (not allocated)
@@ -104,6 +106,7 @@ class HostContextWindowInfo {
    * this context
    */
   WindowInfo* window_info_{nullptr};
+  WindowInfo* window_info_hdp_{nullptr};
 };
 
 class HostInterface {
@@ -135,6 +138,11 @@ class HostInterface {
    * @return Pointer to the WindowInfo in the allocated one from the pool
    */
   WindowInfo* acquire_window_context();
+
+  // Select by object address; both heaps store independent symmetric objects.
+  bool has_hdp_heap_{false};
+  WindowInfo* window_for(const void* ptr, WindowInfo* primary);
+  void complete_hdp(WindowInfo* primary);
 
   /**
    * @brief Return a window context back to the pool

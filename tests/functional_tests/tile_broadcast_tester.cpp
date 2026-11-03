@@ -223,7 +223,7 @@ TileBroadcastTester::TileBroadcastTester(TesterArguments args)
   int tile_size = tile_extent_0 * tile_extent_1;
   int total_size = tile_size * num_teams;  // One tile per workgroup
 
-  source = (float *)rocshmem_malloc(total_size * sizeof(float));
+  source = (float *)alloc_test_source_buffer(total_size * sizeof(float));
   dest = (float *)rocshmem_malloc(total_size * sizeof(float));
 
   if (!source || !dest) {

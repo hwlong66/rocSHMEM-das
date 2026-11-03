@@ -625,8 +625,12 @@ __device__ __forceinline__ uint64_t GDAContext::get_next_qp_group(
 /** @brief Submit a PUT safely through a QP shared across workgroups. */
 __device__ __forceinline__ void GDAContext::put_nbi_shared_qp(
     int qp_index, void *dest, const void *source, size_t length, bool ring_db) {
+  auto [raddr, rkey] = qps[qp_index].get_raddr_info(dest);
+  uint32_t lkey = length <= qps[qp_index].inline_threshold ? 0 :
+      qps[qp_index].get_lkey(reinterpret_cast<uintptr_t>(source));
+
   if (ctx_id_ != 0) {
-    qps[qp_index].put_nbi_single(dest, source, length, ring_db);
+    qps[qp_index].put_nbi_single(reinterpret_cast<void*>(raddr), rkey, source, lkey, length, ring_db);
     return;
   }
 
@@ -637,7 +641,7 @@ __device__ __forceinline__ void GDAContext::put_nbi_shared_qp(
     const uint64_t qp_group = get_next_qp_group(qp_index, pending_lanes);
     if (qp_group & (uint64_t{1} << lane_id)) {
       ActiveWFInfo wf_info(qp_index);
-      qps[qp_index].put_nbi(dest, source, length, wf_info, ring_db);
+      qps[qp_index].put_nbi(reinterpret_cast<void*>(raddr), rkey, source, lkey, length, wf_info, ring_db);
     }
     // Continue with the remaining QP groups.
     pending_lanes &= ~qp_group;
@@ -779,7 +783,7 @@ __device__ void GDAContext::alltoall_linear_thread_puts_das(rocshmem_team_t team
     }
 
     put_nbi_shared_qp(qp_index,
-      reinterpret_cast<char*>(&dst[my_pe_in_team * nelems + elem_offset]) + base_heap_offset,
+      reinterpret_cast<char*>(&dst[my_pe_in_team * nelems + elem_offset]),
       &src[j * nelems + elem_offset], elem_count * sizeof(T), false);
     atomic_nofetch_shared_qp(qp_index,
       reinterpret_cast<char *>(&pSync[alltoall_pSync_offset + my_pe_in_team]) +
@@ -898,7 +902,7 @@ __device__ void GDAContext::alltoallv_copy_das(rocshmem_team_t team, T *dest,
 
     if (nelems != 0) {
       T* src = source + source_displs[j] + elem_offset;
-      T* dst = (T*)((char*)&tmp_buf[my_pe_in_team * tmp_buf_off] + base_heap_offset);
+      T* dst = (T*)((char*)&tmp_buf[my_pe_in_team * tmp_buf_off]);
       put_nbi_shared_qp(qp_index, dst, src, nelems, false);
     }
 
@@ -985,7 +989,7 @@ __device__ void GDAContext::alltoallv_get_das(rocshmem_team_t team, T *dest,
 
     /* Prepare Ctrl Message */
     src = (uint64_t*)&ctrl_msg;
-    dst = (uint64_t*)((char*)&tmp_buf[constmem.my_pe] + base_heap_offset);
+    dst = (uint64_t*)((char*)&tmp_buf[constmem.my_pe]);
 
     put_nbi_shared_qp(qp_index, dst, src, sizeof(uint64_t), true);
     qps[qp_index].quiet_single();
@@ -1016,7 +1020,7 @@ __device__ void GDAContext::alltoallv_get_das(rocshmem_team_t team, T *dest,
     split_wg_range(recv_total, wg_id, wg_count, &recv_offset, &recv_count);
     size_t nelems = recv_count * sizeof(T);
     const void *src = reinterpret_cast<const char *>(source) +
-                      (displ_bits * sizeof(T)) + base_heap_offset;
+                      (displ_bits * sizeof(T));
     void *dst = dest + dest_displs[j] + recv_offset;
 
     // Most workgroups have an empty slice for small variable-count messages.

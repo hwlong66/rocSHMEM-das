@@ -34,16 +34,25 @@ namespace rocshmem {
 
 HIPAllocator *default_allocator_{nullptr};
 
-SingleHeap::SingleHeap() {
+SingleHeap::SingleHeap(bool hdp) {
 
-  allocator_ = get_default_allocator();
+  allocator_ = hdp ? &hdp_allocator_ : get_default_allocator();
   heap_mem_ = new HeapMemoryType(*allocator_, envvar::heap_size.get_value());
   assert(heap_mem_ != nullptr);
 
   strat_ = new DLAllocatorStrategy<HeapMemoryType>(static_cast<HeapMemoryType *>(heap_mem_));
+  if (!hdp && allocator_->get_type() == AllocatorTypeFinegrained &&
+      HIPAllocatorFinegrained::uses_xdp()) {
+    enable_hdp_heap();
+  }
+}
+
+void SingleHeap::enable_hdp_heap() {
+  if (!hdp_heap_) hdp_heap_ = new SingleHeap(true);
 }
 
 SingleHeap::~SingleHeap() {
+  delete hdp_heap_;
   if (strat_) {
     delete strat_;
     strat_ = nullptr;

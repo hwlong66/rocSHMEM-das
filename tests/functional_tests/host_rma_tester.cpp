@@ -34,7 +34,7 @@ HostRmaTester::HostRmaTester(TesterArguments args) : Tester(args) {
   n_pes = rocshmem_n_pes();
   peer  = (my_pe + 1) % n_pes;
 
-  source_buf  = reinterpret_cast<char *>(alloc_test_buffer(max_msg_size));
+  source_buf  = reinterpret_cast<char *>(alloc_test_source_buffer(max_msg_size));
   dest_buf    = reinterpret_cast<char *>(alloc_test_buffer(max_msg_size));
   amo_buf     = reinterpret_cast<long *>(alloc_test_buffer(sizeof(long)));
   amo_int_buf = reinterpret_cast<int  *>(alloc_test_buffer(sizeof(int)));

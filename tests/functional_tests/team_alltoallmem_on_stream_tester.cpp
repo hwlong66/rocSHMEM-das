@@ -52,7 +52,7 @@ TeamAlltoallmemOnStreamTester::TeamAlltoallmemOnStreamTester(TesterArguments arg
   size_t total_bytes = num_bytes_wg * static_cast<size_t>(num_teams);
   buf_size = total_bytes;
 
-  source_buf = static_cast<char *>(alloc_test_buffer(buf_size, args.local_buf_type));
+  source_buf = static_cast<char *>(alloc_test_source_buffer(buf_size, args.local_buf_type));
   dest_buf = static_cast<char *>(alloc_test_buffer(buf_size));
 
   team_world_dup.resize(num_teams);

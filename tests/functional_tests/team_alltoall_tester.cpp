@@ -110,7 +110,7 @@ TeamAlltoallTester<T1>::TeamAlltoallTester(TesterArguments args)
   size_t total_elems = num_elems_wg * args.num_wgs;
   size_t buff_size = total_elems * sizeof(T1);
 
-  source_buf = (T1 *)alloc_test_buffer(buff_size, args.local_buf_type);
+  source_buf = (T1 *)alloc_test_source_buffer(buff_size, args.local_buf_type);
   dest_buf = (T1 *)alloc_test_buffer(buff_size);
 
   char* value{nullptr};

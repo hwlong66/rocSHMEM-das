@@ -60,7 +60,7 @@ public:
 
 class RemoteHeapInfoMPI : public RemoteHeapInfoAbstract {
 public:
-  RemoteHeapInfoMPI(char *base_ptr, size_t size, MPI_Comm comm) : rheap(base_ptr, size, comm) {};
+  RemoteHeapInfoMPI(char *base_ptr, size_t size, MPI_Comm comm, bool* split_heap = nullptr) : rheap(base_ptr, size, comm, split_heap) {};
 
   WindowInfo* get_window_info() override { return rheap.get_window_info(); };
   __host__ const std::vector<char*, StdAllocatorHIP<char*>>& get_heap_bases() override { return rheap.get_heap_bases(); };
@@ -72,7 +72,7 @@ private:
 
 class RemoteHeapInfoTCP : public RemoteHeapInfoAbstract {
 public:
-  RemoteHeapInfoTCP(char *base_ptr, size_t size, TcpBootstrap *bootstrap) : rheap(base_ptr, size, bootstrap) {};
+  RemoteHeapInfoTCP(char *base_ptr, size_t size, TcpBootstrap *bootstrap, bool* split_heap = nullptr) : rheap(base_ptr, size, bootstrap, split_heap) {};
 
   WindowInfo* get_window_info() override { return rheap.get_window_info(); };
   __host__ const std::vector<char*, StdAllocatorHIP<char*>>&  get_heap_bases() override { return rheap.get_heap_bases(); };
@@ -87,16 +87,44 @@ class SymmetricHeap {
  public:
   SymmetricHeap(MPI_Comm comm, TcpBootstrap* bootstrap  = nullptr) {
 
+    bool split_heap = single_heap_.has_hdp_heap();
     if (comm != MPI_COMM_NULL) {
       remote_heap_info_ = new RemoteHeapInfoMPI(single_heap_.get_base_ptr(),
-                                                single_heap_.get_size(), comm);
+                                                single_heap_.get_size(), comm, &split_heap);
     } else  {
       remote_heap_info_ = new RemoteHeapInfoTCP(single_heap_.get_base_ptr(),
-                                                single_heap_.get_size(), bootstrap);
+                                                single_heap_.get_size(), bootstrap, &split_heap);
+    }
+    // The primary heap exchange returns the global decision. Nodes without
+    // local XDP still participate in the same second-heap/key exchanges.
+    if (split_heap) single_heap_.enable_hdp_heap();
+    if (single_heap_.has_hdp_heap()) {
+      auto& hdp = single_heap_.hdp_heap();
+      if (comm != MPI_COMM_NULL)
+        remote_heap_info_hdp_ = new RemoteHeapInfoMPI(hdp.get_base_ptr(), hdp.get_size(), comm);
+      else
+        remote_heap_info_hdp_ = new RemoteHeapInfoTCP(hdp.get_base_ptr(), hdp.get_size(), bootstrap);
     }
   }
 
+  bool has_hdp_heap() const { return remote_heap_info_hdp_ != nullptr; }
+  void malloc_hdp(void** ptr, size_t size) { single_heap_.hdp_heap().malloc(ptr, size); }
+  void malign_hdp(void** ptr, size_t alignment, size_t size) {
+    single_heap_.hdp_heap().malign(ptr, alignment, size);
+  }
+  char* get_local_heap_base_hdp() { return single_heap_.hdp_heap().get_base_ptr(); }
+  size_t get_size_hdp() { return single_heap_.hdp_heap().get_size(); }
+  const auto& get_heap_bases_hdp() {
+    return has_hdp_heap() ? remote_heap_info_hdp_->get_heap_bases() : remote_heap_info_->get_heap_bases();
+  }
+  bool is_hdp(const void* ptr) {
+    auto addr = reinterpret_cast<uintptr_t>(ptr);
+    auto base = reinterpret_cast<uintptr_t>(get_local_heap_base_hdp());
+    return has_hdp_heap() && addr >= base && addr - base < get_size_hdp();
+  }
+
   ~SymmetricHeap() {
+    delete remote_heap_info_hdp_;
     delete remote_heap_info_;
   }
   /**
@@ -123,7 +151,10 @@ class SymmetricHeap {
    *
    * @param[in] Handle of previously allocated memory
    */
-  void free(void* ptr) { single_heap_.free(ptr); }
+  void free(void* ptr) {
+    if (is_hdp(ptr)) single_heap_.hdp_heap().free(ptr);
+    else single_heap_.free(ptr);
+  }
 
   /**
    * @brief Accessor for local heap base
@@ -195,6 +226,7 @@ class SymmetricHeap {
    * @brief Implementation of remote heaps
    */
   RemoteHeapInfoAbstract *remote_heap_info_{nullptr};
+  RemoteHeapInfoAbstract *remote_heap_info_hdp_{nullptr};
 };
 
 }  // namespace rocshmem

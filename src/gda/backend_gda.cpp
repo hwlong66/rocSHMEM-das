@@ -143,6 +143,7 @@ void GDABackend::init() {
 
   setup_ibv();
   setup_heap_memory_rkey();
+  if (heap.has_hdp_heap()) setup_heap_memory_rkey(true);
   setup_gpu_qps();
 
   /*
@@ -194,6 +195,7 @@ GDABackend::~GDABackend() {
 
   cleanup_gpu_qps();
   cleanup_heap_memory_rkey();
+  if (heap.has_hdp_heap()) cleanup_heap_memory_rkey(true);
   cleanup_ibv();
 
   close_dv_libs();
@@ -298,9 +300,11 @@ void GDABackend::setup_ipc() {
   const auto &heap_bases{heap.get_heap_bases()};
 
   if (MPI_COMM_NULL != backend_comm)
-    ipcImpl.ipcHostInit(my_pe, heap_bases, backend_comm);
+    ipcImpl.ipcHostInit(my_pe, heap_bases, backend_comm,
+      heap.has_hdp_heap() ? &heap.get_heap_bases_hdp() : nullptr, heap.get_size_hdp());
   else
-    ipcImpl.ipcHostInit(my_pe, heap_bases, backend_bootstr);
+    ipcImpl.ipcHostInit(my_pe, heap_bases, backend_bootstr,
+      heap.has_hdp_heap() ? &heap.get_heap_bases_hdp() : nullptr, heap.get_size_hdp());
 
   ipcImpl.heap_size = heap.get_size();
 }
@@ -1715,17 +1719,18 @@ void GDABackend::exchange_qp_dest_info() {
   }
 }
 
-void GDABackend::setup_heap_memory_rkey() {
-  auto *base_heap = heap.get_local_heap_base();
+void GDABackend::setup_heap_memory_rkey(bool hdp) {
+  auto& keys = hdp ? heap_rkey_hdp : heap_rkey;
+  auto *base_heap = hdp ? heap.get_local_heap_base_hdp() : heap.get_local_heap_base();
   int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC;
 
   if (envvar::gda::pcie_relaxed_ordering) {
     access |= IBV_ACCESS_RELAXED_ORDERING;
   }
   for (int n = 0; n < num_nics_; n++) {
-    nic_devices_[n].heap_mr = ibv.reg_mr(nic_devices_[n].pd_orig, base_heap,
-                                         heap.get_size(), access);
-    CHECK_NNULL(nic_devices_[n].heap_mr, "ibv_reg_mr");
+    (hdp ? nic_devices_[n].heap_mr_hdp : nic_devices_[n].heap_mr) = ibv.reg_mr(nic_devices_[n].pd_orig, base_heap,
+                                         (hdp ? heap.get_size_hdp() : heap.get_size()), access);
+    CHECK_NNULL((hdp ? nic_devices_[n].heap_mr_hdp : nic_devices_[n].heap_mr), "ibv_reg_mr");
   }
 
   const size_t rkeys_per_pe = sizeof(uint32_t) * num_nics_;
@@ -1733,14 +1738,14 @@ void GDABackend::setup_heap_memory_rkey() {
   uint32_t *host_rkey_cpy = reinterpret_cast<uint32_t*>(malloc(rkeys_size));
   if (!host_rkey_cpy) { abort(); }
 
-  CHECK_HIP(hipHostMalloc(&heap_rkey, rkeys_size));
+  CHECK_HIP(hipHostMalloc(&keys, rkeys_size));
   for (int n = 0; n < num_nics_; n++) {
-    heap_rkey[my_pe * num_nics_ + n] = nic_devices_[n].heap_mr->rkey;
+    keys[my_pe * num_nics_ + n] = (hdp ? nic_devices_[n].heap_mr_hdp : nic_devices_[n].heap_mr)->rkey;
   }
 
   hipStream_t stream;
   CHECK_HIP(hipStreamCreateWithFlags(&stream, hipStreamNonBlocking));
-  CHECK_HIP(hipMemcpyAsync(host_rkey_cpy, heap_rkey, rkeys_size,
+  CHECK_HIP(hipMemcpyAsync(host_rkey_cpy, keys, rkeys_size,
                            hipMemcpyDefault, stream));
   CHECK_HIP(hipStreamSynchronize(stream));
 
@@ -1751,7 +1756,7 @@ void GDABackend::setup_heap_memory_rkey() {
   else
     backend_bootstr->allGather(host_rkey_cpy, rkeys_per_pe);
 
-  CHECK_HIP(hipMemcpyAsync(heap_rkey, host_rkey_cpy, rkeys_size,
+  CHECK_HIP(hipMemcpyAsync(keys, host_rkey_cpy, rkeys_size,
                            hipMemcpyDefault, stream));
   CHECK_HIP(hipStreamSynchronize(stream));
   CHECK_HIP(hipStreamDestroy(stream));
@@ -1759,16 +1764,17 @@ void GDABackend::setup_heap_memory_rkey() {
   free(host_rkey_cpy);
 }
 
-void GDABackend::cleanup_heap_memory_rkey() {
+void GDABackend::cleanup_heap_memory_rkey(bool hdp) {
+  auto& keys = hdp ? heap_rkey_hdp : heap_rkey;
   for (auto &nic : nic_devices_) {
-    if (nic.heap_mr) {
-      int ret = ibv.dereg_mr(nic.heap_mr);
+    if ((hdp ? nic.heap_mr_hdp : nic.heap_mr)) {
+      int ret = ibv.dereg_mr((hdp ? nic.heap_mr_hdp : nic.heap_mr));
       CHECK_ZERO(ret, "ibv_dereg_mr");
-      nic.heap_mr = nullptr;
+      (hdp ? nic.heap_mr_hdp : nic.heap_mr) = nullptr;
     }
   }
 
-  CHECK_HIP(hipHostFree(heap_rkey));
+  CHECK_HIP(hipHostFree(keys));
 }
 
 void GDABackend::setup_gpu_qps() {
@@ -1826,6 +1832,14 @@ void GDABackend::setup_gpu_qps() {
     CHECK_HIP(hipMemcpy(&gpu_qps[i], &host_qps[i], sizeof(QueuePair), hipMemcpyDefault));
 
     initialize_gpu_qp(&gpu_qps[i], i);
+    if (heap.has_hdp_heap()) {
+      auto& qp = gpu_qps[i];
+      qp.base_heap_hdp = reinterpret_cast<uintptr_t>(heap.get_local_heap_base_hdp());
+      qp.remote_heap_hdp = reinterpret_cast<uintptr_t>(heap.get_heap_bases_hdp()[qp_dest_pe]);
+      qp.hdp_heap_size = heap.get_size_hdp();
+      qp.lkey_hdp = nic_for_qp(i).heap_mr_hdp->lkey;
+      qp.rkey_hdp = heap_rkey_hdp[qp_dest_pe * num_nics_ + nic_idx_for_qp(i)];
+    }
   }
 }
 

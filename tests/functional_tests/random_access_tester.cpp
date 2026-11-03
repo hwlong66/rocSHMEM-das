@@ -143,7 +143,7 @@ RandomAccessTester::RandomAccessTester(TesterArguments args) : Tester(args) {
     abort();
   }
 
-  s_buf = (int *) alloc_test_buffer(max_size * wg_size * space, args.local_buf_type);
+  s_buf = (int *) alloc_test_source_buffer(max_size * wg_size * space, args.local_buf_type);
   r_buf = (int *) alloc_test_buffer(max_size * wg_size * space);
   h_buf = (int *)malloc(max_size * wg_size * space);
   h_dev_buf = (int *)malloc(max_size * wg_size * space);

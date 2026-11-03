@@ -63,6 +63,12 @@ __host__ IPCHostContext::IPCHostContext(Backend *backend,
                   hipMemcpyDeviceToHost));
 
   ipcImpl_.ipc_bases = ipc_bases;
+  if (b->ipcImpl.ipc_bases_hdp) {
+    ipcImpl_.ipc_bases_hdp = new char*[b->ipcImpl.shm_size];
+    CHECK_HIP(hipMemcpy(ipcImpl_.ipc_bases_hdp, b->ipcImpl.ipc_bases_hdp,
+        b->ipcImpl.shm_size * sizeof(char*), hipMemcpyDeviceToHost));
+    ipcImpl_.hdp_heap_size = b->ipcImpl.hdp_heap_size;
+  }
 
   if (is_ipc_non_mpi()) {
     CHECK_HIP(hipStreamCreate(&ctx_stream_));
@@ -80,6 +86,7 @@ __host__ IPCHostContext::~IPCHostContext() {
   }
 
   delete[] ipcImpl_.ipc_bases;
+  delete[] ipcImpl_.ipc_bases_hdp;
 
   host_interface->release_window_context(context_window_info);
 }
@@ -138,8 +145,7 @@ __host__ void IPCHostContext::quiet() {
 __host__ void *IPCHostContext::shmem_ptr(const void *dest, int pe) {
   void *ret = nullptr;
   void *dst = const_cast<void *>(dest);
-  uint64_t L_offset = reinterpret_cast<char *>(dst) - ipcImpl_.ipc_bases[my_pe];
-  ret = ipcImpl_.ipc_bases[pe] + L_offset;
+  ret = ipcImpl_.remote_ptr(reinterpret_cast<char *>(dst), my_pe, pe);
   return ret;
 }
 

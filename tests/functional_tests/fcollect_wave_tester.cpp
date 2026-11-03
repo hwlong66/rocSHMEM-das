@@ -118,7 +118,7 @@ FcollectWaveTester<T1>::FcollectWaveTester(TesterArguments args)
   int total_elems = (max_msg_size / sizeof(T1)) * args.num_wgs * num_warps;
   int buff_size = total_elems * sizeof(T1);
 
-  source_buf = (T1 *)alloc_test_buffer(buff_size, args.local_buf_type);
+  source_buf = (T1 *)alloc_test_source_buffer(buff_size, args.local_buf_type);
   dest_buf = (T1 *)alloc_test_buffer(buff_size * n_pes);
 
   char* value{nullptr};

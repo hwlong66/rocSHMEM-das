@@ -130,7 +130,7 @@ TeamReduceScatterTester<T1, T2>::TeamReduceScatterTester(
   size_t buff_size = total_elems * sizeof(T1);
 
   // source buffer: n_pes * max_msg_size elements per WG (on symmetric heap)
-  s_buf = (T1 *)alloc_test_buffer(n_pes * buff_size, args.local_buf_type);
+  s_buf = (T1 *)alloc_test_source_buffer(n_pes * buff_size, args.local_buf_type);
   // dest buffer: max_msg_size elements per WG (on symmetric heap)
   r_buf = (T1 *)alloc_test_buffer(buff_size);
 

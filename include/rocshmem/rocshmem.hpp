@@ -223,6 +223,12 @@ __host__ void rocshmem_finalize();
  */
 __host__ void *rocshmem_malloc(size_t size);
 
+/** Allocate an independent HDP source buffer (ordinary heap when XDP is off or with RO backend).
+ * Collective, like rocshmem_malloc; release with rocshmem_free.
+ */
+__host__ void *rocshmem_malloc_hdp(size_t size);
+__host__ void *rocshmem_align_hdp(size_t alignment, size_t size);
+
 /**
  * @brief Allocate memory of \p size bytes from the symmetric heap with the
  * requested \p alignment. This is a collective operation and must be called by

@@ -30,8 +30,7 @@ __device__ void GDAContext::internal_get_broadcastmem_wg_das(void *dst, const vo
   const size_t nbytes = static_cast<size_t>(nelems);
   int local_pe{-1};
   if (ipcImpl_.isIpcAvailable(constmem.my_pe, pe_root, &local_pe)) {
-    const uint64_t offset = reinterpret_cast<const char *>(src) - ipcImpl_.ipc_bases[ipcImpl_.shm_rank];
-    ipcImpl_.ipcCopy_wg<MemcpyKind::GetBlocking>(dst, ipcImpl_.ipc_bases[local_pe] + offset, nbytes, local_pe);
+    ipcImpl_.ipcCopy_wg<MemcpyKind::GetBlocking>(dst, ipcImpl_.remote_ptr(reinterpret_cast<const char *>(src), ipcImpl_.shm_rank, local_pe), nbytes, local_pe);
     return;
   }
 
@@ -52,7 +51,6 @@ __device__ void GDAContext::internal_get_broadcastmem_wg_das(void *dst, const vo
     rails = min(rails, num_qps_per_pe);
 
     const size_t chunk = (nbytes + rails - 1) / rails;
-    const uint64_t src_offset = reinterpret_cast<const char *>(src) - base_heap[constmem.my_pe];
     char *dst_bytes = reinterpret_cast<char *>(dst);
 
     for (uint32_t rail = 0; rail < rails; rail++) {
@@ -62,7 +60,7 @@ __device__ void GDAContext::internal_get_broadcastmem_wg_das(void *dst, const vo
       const uint32_t qp_row = (static_cast<uint32_t>(blockIdx.x) + rail * active_wgs) % num_qps_per_pe;
       const uint32_t qp_index = qp_row * constmem.num_pes + pe_root;
       qps[qp_index].get_nbi(dst_bytes + begin,
-                            base_heap[pe_root] + src_offset + begin,
+                            reinterpret_cast<const char*>(src) + begin,
                             length, wf_info);
     }
 

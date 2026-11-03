@@ -61,7 +61,7 @@ PutmemSignalOnStreamTester::PutmemSignalOnStreamTester(TesterArguments args)
   int total_bytes = num_bytes_stream * num_streams;
   buf_size = total_bytes;
 
-  source_buf = static_cast<char *>(alloc_test_buffer(buf_size, args.local_buf_type));
+  source_buf = static_cast<char *>(alloc_test_source_buffer(buf_size, args.local_buf_type));
   dest_buf = static_cast<char *>(alloc_test_buffer(buf_size));
   sig_addr = static_cast<uint64_t *>(alloc_test_buffer(num_streams * sizeof(uint64_t)));
 

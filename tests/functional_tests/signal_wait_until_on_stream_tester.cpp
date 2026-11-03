@@ -52,7 +52,7 @@ SignalWaitUntilOnStreamTester::SignalWaitUntilOnStreamTester(
   sig_addr =
       static_cast<uint64_t *>(alloc_test_buffer(num_streams * sizeof(uint64_t)));
   source_buf =
-      static_cast<uint64_t *>(alloc_test_buffer((num_streams * sizeof(uint64_t)),
+      static_cast<uint64_t *>(alloc_test_source_buffer((num_streams * sizeof(uint64_t)),
                                                 args.local_buf_type));
 
   streams.resize(num_streams);

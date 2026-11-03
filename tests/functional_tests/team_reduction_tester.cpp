@@ -118,7 +118,7 @@ TeamReductionTester<T1, T2>::TeamReductionTester(
   int total_elems = (max_msg_size / sizeof(T1)) * args.num_wgs;
   int buff_size = total_elems * sizeof(T1);
 
-  s_buf = (T1 *)alloc_test_buffer(buff_size, args.local_buf_type);
+  s_buf = (T1 *)alloc_test_source_buffer(buff_size, args.local_buf_type);
   r_buf = (T1 *)alloc_test_buffer(buff_size);
 
   char* value{nullptr};

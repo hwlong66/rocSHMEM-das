@@ -50,14 +50,16 @@ __device__ uint64_t QueuePair::shca_post_wqe_amo_single(
 
 __device__ void QueuePair::shca_post_wqe_rma_single_lane_dp(
     int32_t size, uintptr_t laddr, uintptr_t raddr, uint8_t opcode) {
-  shca_post_wqe_rma_single_dp(size, laddr, lkey, raddr, rkey, opcode, true);
+  shca_post_wqe_rma_single_dp(size, laddr,
+      size <= inline_threshold && opcode == gda_op_rdma_write ? 0 : get_lkey(laddr),
+      raddr, get_rkey(raddr), opcode, true);
 }
 
 __device__ void QueuePair::shca_post_wqe_amo_single_lane_dp(
     int32_t size, uintptr_t raddr, uint8_t opcode, int64_t atomic_data,
     int64_t atomic_cmp, bool fetching) {
   (void)size;
-  shca_post_wqe_amo_single(raddr, rkey, opcode, atomic_data, atomic_cmp,
+  shca_post_wqe_amo_single(raddr, get_rkey(raddr), opcode, atomic_data, atomic_cmp,
                            fetching, false);
 }
 

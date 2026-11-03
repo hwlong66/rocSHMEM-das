@@ -72,6 +72,7 @@ struct NicDevice {
   int gid_index = 0;
   uint32_t gid_type = 0;
   struct ibv_mr *heap_mr = nullptr;
+  struct ibv_mr *heap_mr_hdp = nullptr;
 
   /* GDA_IONIC & GDA_MLX5*/
   struct ibv_pd *pd_parent = nullptr;
@@ -95,6 +96,7 @@ class GDABackend : public Backend {
   GDAProvider gda_provider = GDAProvider::UNSET;
 
   uint32_t *heap_rkey = nullptr;
+  uint32_t *heap_rkey_hdp = nullptr;
 
   /**
    * @brief Device-visible flat table of symmetric user-buffer registrations.
@@ -554,8 +556,8 @@ class GDABackend : public Backend {
    */
   void setup_fence_buffer();
 
-  void setup_heap_memory_rkey();
-  void cleanup_heap_memory_rkey();
+  void setup_heap_memory_rkey(bool hdp = false);
+  void cleanup_heap_memory_rkey(bool hdp = false);
 
   void initialize_gpu_qp(QueuePair* qp, int conn_num);
   void bnxt_initialize_gpu_qp(QueuePair* qp, int conn_num);

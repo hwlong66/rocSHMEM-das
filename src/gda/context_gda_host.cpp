@@ -55,6 +55,12 @@ __host__ GDAHostContext::GDAHostContext(Backend *backend,
   }
   ipcImpl_.pes_with_ipc_avail = pes_with_ipc_avail;
   ipcImpl_.ipc_bases = ipc_bases;
+  if (b->ipcImpl.ipc_bases_hdp) {
+    ipcImpl_.ipc_bases_hdp = new char*[b->ipcImpl.shm_size];
+    CHECK_HIP(hipMemcpy(ipcImpl_.ipc_bases_hdp, b->ipcImpl.ipc_bases_hdp,
+        b->ipcImpl.shm_size * sizeof(char*), hipMemcpyDeviceToHost));
+    ipcImpl_.hdp_heap_size = b->ipcImpl.hdp_heap_size;
+  }
   ipcImpl_.shm_size = backend->ipcImpl.shm_size;
   ipcImpl_.shm_rank = backend->ipcImpl.shm_rank;
   ipcImpl_.ipc_first_pe = backend->ipcImpl.ipc_first_pe;
@@ -65,6 +71,7 @@ __host__ GDAHostContext::GDAHostContext(Backend *backend,
 __host__ GDAHostContext::~GDAHostContext() {
   delete[] ipcImpl_.pes_with_ipc_avail;
   delete[] ipcImpl_.ipc_bases;
+  delete[] ipcImpl_.ipc_bases_hdp;
 
   host_interface->release_window_context(context_window_info);
 }
@@ -102,8 +109,7 @@ __host__ void *GDAHostContext::shmem_ptr(const void *dest, int pe) {
   int local_pe{-1};
   if (ipcImpl_.isIpcAvailable(my_pe, pe, &local_pe)) {
     void *dst = const_cast<void *>(dest);
-    uint64_t L_offset = reinterpret_cast<char *>(dst) - ipcImpl_.ipc_bases[ipcImpl_.shm_rank];
-    ret = ipcImpl_.ipc_bases[local_pe] + L_offset;
+    ret = ipcImpl_.remote_ptr(reinterpret_cast<char *>(dst), ipcImpl_.shm_rank, local_pe);
   }
   return ret;
 }
