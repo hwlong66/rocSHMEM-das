@@ -41,6 +41,27 @@ void init_constant_memory(void) {
 #if defined(USE_GDA)
   if (constmem_values.backend_type == BackendType::GDA_BACKEND) {
     constmem_values.gda_provider = static_cast<GDABackend*>(backend)->get_gda_provider();
+    constmem_values.pxn_enabled = !envvar::disable_pxn;
+    constmem_values.world_proxy_sync_enabled =
+        static_cast<GDABackend*>(backend)->world_proxy_sync_enabled();
+    constmem_values.aligned_world_proxy_data_enabled =
+        static_cast<GDABackend*>(backend)->aligned_world_proxy_data_enabled();
+    const auto& node_first_pes =
+        static_cast<GDABackend*>(backend)->world_proxy_node_first_pes();
+    constmem_values.world_proxy_node_count =
+        static_cast<int>(node_first_pes.size());
+    for (size_t i = 0; i < node_first_pes.size(); i++) {
+      constmem_values.world_proxy_node_first_pes[i] = node_first_pes[i];
+    }
+    auto* gda_backend = static_cast<GDABackend*>(backend);
+    constmem_values.world_proxy_nic_layout_enabled =
+        gda_backend->world_proxy_nic_layout_enabled();
+    constmem_values.world_proxy_nic_count =
+        gda_backend->world_proxy_nic_count();
+    const auto& pe_nic_ids = gda_backend->world_proxy_pe_nic_ids();
+    for (size_t i = 0; i < pe_nic_ids.size(); i++) {
+      constmem_values.world_proxy_pe_nic_ids[i] = pe_nic_ids[i];
+    }
   }
 #endif
 

@@ -401,6 +401,144 @@ class GDAContext : public Context {
 
  private:
 
+#if defined(USE_DAS)
+  // PXN helpers are implemented in proxy/ and used by the DAS entries.
+  __device__ void internal_dispatch_proxy_sync_wave(GDATeam *team_obj, int64_t *p_sync,
+      ActiveWFInfo &wf_info, int64_t epoch);
+  __device__ bool internal_proxy_broadcast_wave_das(GDATeam *team_obj, void *dst, const void *src,
+      size_t bytes, int root, int64_t *p_sync, ActiveWFInfo &wf_info, int64_t &epoch);
+  __device__ bool internal_try_pxn_broadcastmem_wave_das(rocshmem_team_t team, void *dst,
+      const void *src, int bytes, int root);
+  __device__ bool internal_try_pxn_fcollectmem_wave_das(rocshmem_team_t team, void *dst,
+      const void *src, int bytes);
+  __device__ bool internal_try_pxn_alltoallmem_wave_das(rocshmem_team_t team, void *dst,
+      const void *src, int bytes);
+  template <typename T, ROCSHMEM_OP Op, bool ReduceScatter>
+  __device__ bool internal_try_pxn_reduce_wave_das(rocshmem_team_t team, T *dst,
+      const T *src, int nelems);
+
+  __device__ bool internal_try_pxn_sync_das(GDATeam *team_obj, int64_t *p_sync, ThreadScope scope);
+  __device__ bool internal_try_pxn_sync_range_das(int pe_start, int stride, int pe_size,
+      int64_t *p_sync, ThreadScope scope);
+  __device__ void internal_world_proxy_sync_thread(int pe, int pe_size, int64_t *p_sync,
+      ActiveWFInfo &wf_info, int64_t epoch, int proxy_qp_row);
+  __device__ void internal_team_proxy_sync_thread(GDATeam *team_obj, int64_t *p_sync,
+      ActiveWFInfo &wf_info, int64_t epoch);
+
+  __device__ void internal_require_pxn_route(GDATeam *team, int pe_start,
+                                             int stride, int pe_size,
+                                             const char *operation);
+
+  template <typename TryProxy>
+  __device__ bool internal_try_pxn_collective(
+      GDATeam *team, int pe_start, int stride, int pe_size,
+      const char *operation, TryProxy try_proxy);
+
+  template <typename T>
+  __device__ void internal_broadcast(T *dest, const T *source, int nelems,
+      int pe_root, int pe_start, int stride, int pe_size, long *p_sync,
+      int64_t proxy_epoch_base = 1,
+      int proxy_qp_row = -1,
+      GDATeam *team_obj = nullptr);
+
+  template <typename T>
+  __device__ bool internal_try_pxn_proxy_broadcast(GDATeam *team_obj, T *dst, const T *src, int nelems, int pe_root,
+      int pe_start, int stride, int pe_size, long *p_sync,
+      ActiveWFInfo &wf_info, int64_t proxy_epoch_base,
+      int proxy_qp_row);
+
+  template <typename T>
+  __device__ bool internal_aligned_multi_proxy_broadcast(T *dst, const T *src, int nelems, int pe_root, int pe_start,
+      int stride, int pe_size, long *p_sync,
+      ActiveWFInfo &wf_info, int64_t proxy_epoch_base,
+      int proxy_qp_row, bool require_matching_nic);
+
+  template <typename T>
+  __device__ bool internal_try_hierarchical_fcollect(GDATeam *team_obj, T *dst, const T *src, int nelems);
+
+  template <typename T>
+  __device__ void internal_node_proxy_fcollect(GDATeam *team_obj, T *dst, const T *src, int nelems);
+
+  template <typename T>
+  __device__ bool internal_routed_team_proxy_broadcast(GDATeam *team_obj, T *dst, const T *src, int nelems, int pe_root,
+      long *p_sync, ActiveWFInfo &wf_info, int64_t proxy_epoch_base,
+      int proxy_qp_row);
+
+  template <typename T>
+  __device__ void internal_routed_team_proxy_alltoall(GDATeam *team_obj, T *dst, const T *src, int nelems,
+      int elem_offset, int elem_count);
+
+  template <typename T>
+  __device__ bool internal_try_pxn_proxy_alltoall(GDATeam *team_obj, T *dst, const T *src, int nelems,
+      int elem_offset, int elem_count, ActiveWFInfo &wf_info);
+
+  template <typename T, ROCSHMEM_OP Op, bool ReduceScatter>
+  __device__ void internal_broadcast_proxy_reduce(GDATeam *team_obj, T *dest, const T *source, int nelems, int elem_offset = 0, int elem_count = -1);
+
+  template <typename T, ROCSHMEM_OP Op, bool ReduceScatter>
+  __device__ void internal_node_proxy_reduce(GDATeam *team_obj, T *dest, const T *source, int nelems, int elem_offset = 0, int elem_count = -1);
+
+  template <typename T, ROCSHMEM_OP Op>
+  __device__ bool internal_try_proxy_allreduce(GDATeam *team_obj, T *dest, const T *source, int nelems,
+      ActiveWFInfo &wf_info);
+
+  template <typename T, ROCSHMEM_OP Op>
+  __device__ bool internal_try_pxn_proxy_reduce_scatter(GDATeam *team_obj, T *dest, const T *source, int nelems, int elem_offset = 0, int elem_count = -1);
+
+  template <typename T>
+  __device__ void internal_routed_world_proxy_alltoallv(GDATeam *team_obj, T *dest, const size_t dest_nelems[],
+      const size_t dest_displs[], T *source, const size_t source_nelems[],
+      const size_t source_displs[], int wg_id = 0, int wg_count = 1);
+
+  template <typename T>
+  __device__ bool internal_single_proxy_world_broadcast(T *dst, const T *src,
+      int nelems, int pe_root, int pe_start, int stride, int pe_size,
+      long *p_sync, ActiveWFInfo &wf_info,
+      int64_t proxy_epoch_base, int proxy_qp_row);
+
+  template <typename T>
+  __device__ bool internal_routed_multi_proxy_broadcast(T *dst, const T *src, int nelems, int pe_root, int pe_start,
+      int stride, int pe_size, long *p_sync, ActiveWFInfo &wf_info,
+      int64_t proxy_epoch_base, int proxy_qp_row);
+
+  template <typename T>
+  __device__ void internal_put_broadcast(T *dst, const T *src, int nelems,
+      int pe_root, int PE_start, int logPE_stride, int PE_size,
+      ActiveWFInfo &wf_info);
+
+  template <typename T>
+  __device__ void internal_get_broadcast(T *dst, const T *src, int nelems,
+      int pe_root, ActiveWFInfo &wf_info);
+
+  template <typename T>
+  __device__ void internal_aligned_world_proxy_alltoall(GDATeam *team_obj, T *dest,
+      const T *source, int nelems, int elem_offset, int elem_count,
+      ActiveWFInfo &wf_info);
+
+  template <typename T>
+  __device__ void internal_routed_world_proxy_alltoall(GDATeam *team_obj, T *dest, const T *source, int nelems,
+      int elem_offset, int elem_count, ActiveWFInfo &wf_info);
+
+  template <typename T>
+  __device__ void internal_broadcast_world_proxy_alltoall(GDATeam *team_obj, T *dest, const T *source, int nelems,
+      int elem_offset, int elem_count, ActiveWFInfo &wf_info);
+
+  __device__ void internal_world_proxy_sync_wg(int pe, int PE_size,
+      int64_t *pSync, ActiveWFInfo &wf_info, int64_t epoch = 1,
+      int proxy_qp_row = -1);
+
+  __device__ void internal_team_proxy_sync_wg(GDATeam *team_obj,
+      int64_t *pSync, ActiveWFInfo &wf_info, int64_t epoch);
+
+  __device__ void internal_dispatch_proxy_sync_wg(GDATeam *team_obj,
+      int64_t *pSync, ActiveWFInfo &wf_info, int64_t epoch);
+
+  template <typename T, ROCSHMEM_OP Op>
+  __device__ void internal_segmented_proxy_allreduce(T *dst, const T *src, int nelems,
+      GDATeam *team_obj, ActiveWFInfo &wf_info, bool use_pxn_sync);
+#endif
+
+
   static constexpr size_t kHierarchicalMinBytes = 256 * 1024;  // 256 KB: minimum size for hierarchical/proxy algorithms
   struct CollectiveChunkPolicy {
     size_t max_bytes;

@@ -637,6 +637,12 @@ template <MemcpyKind Kind = MemcpyKind::Put>
 
   
   for (int j = 16; j >= 1; j >>= 1) {
+#if defined(USE_DAS)
+    // Vector helpers use typed loads/stores; collective slices may be unaligned.
+    if ((reinterpret_cast<uintptr_t>(dst_def) | reinterpret_cast<uintptr_t>(src_def)) & (j - 1)) {
+      continue;
+    }
+#endif
     cpy_size = size / j;
     for (int i = thread_id; i < cpy_size; i += block_size) {
       dst_bytes = dst_def;
@@ -674,6 +680,12 @@ template <MemcpyKind Kind = MemcpyKind::Put>
   src_bytes = src_def;
 
   for (int j = 16; j >= 1; j >>= 1) {
+#if defined(USE_DAS)
+    // Vector helpers use typed loads/stores; collective slices may be unaligned.
+    if ((reinterpret_cast<uintptr_t>(dst_def) | reinterpret_cast<uintptr_t>(src_def)) & (j - 1)) {
+      continue;
+    }
+#endif
     cpy_size = size / j;
     for (int i = wave_tid; i < cpy_size; i += wave_size) {
       dst_bytes = dst_def;

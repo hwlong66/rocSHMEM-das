@@ -47,6 +47,17 @@ class GDATeam : public Team {
   int pool_index_{-1};
   uint64_t reduce_sequence_number = 0;
   uint64_t alltoall_sequence_number = 0;
+  uint64_t proxy_alltoall_sync_epoch = 1;
+  uint64_t proxy_broadcast_sync_epoch = 1;
+  uint64_t proxy_fcollect_sync_epoch = 1;
+  uint64_t proxy_reduce_sync_epoch = 1;
+  uint64_t in_team_proxy_sync_epoch = 1;
+
+  // Partial-team PXN layout. Entries are ordered by IPC-island first PE.
+  // A zero count is valid only for node-local teams when PXN is enabled.
+  int in_team_proxy_node_count = 0;
+  int in_team_proxy_node_first_pes[ROCSHMEM_BARRIER_SYNC_SIZE]{};
+  int in_team_proxy_pes[ROCSHMEM_BARRIER_SYNC_SIZE]{};
 };
 
 }  // namespace rocshmem

@@ -505,6 +505,12 @@ __device__ void GDAContext::internal_direct_allreduce_wave(T *dst, const T *src,
 template <typename T, ROCSHMEM_OP Op>
 __device__ int GDAContext::reduce_wave(rocshmem_team_t team, T *dest,
                                        const T *source, int nreduce) {
+#if defined(USE_DAS)
+  if (internal_try_pxn_reduce_wave_das<T, Op, false>(team, dest, source, nreduce)) {
+    return ROCSHMEM_SUCCESS;
+  }
+#endif
+
   GDATeam *team_obj = reinterpret_cast<GDATeam *>(team);
 
   int PE_size = team_obj->tinfo_wrt_world->size;
@@ -940,6 +946,12 @@ __device__ int GDAContext::reduce_scatter_wg(rocshmem_team_t team, T *dest,
 template <typename T, ROCSHMEM_OP Op>
 __device__ int GDAContext::reduce_scatter_wave(rocshmem_team_t team, T *dest,
                                                const T *source, int nreduce) {
+#if defined(USE_DAS)
+  if (internal_try_pxn_reduce_wave_das<T, Op, true>(team, dest, source, nreduce)) {
+    return ROCSHMEM_SUCCESS;
+  }
+#endif
+
   GDATeam *team_obj = reinterpret_cast<GDATeam *>(team);
 
   int PE_size   = team_obj->tinfo_wrt_world->size;
@@ -1051,6 +1063,12 @@ __device__ void GDAContext::internal_get_broadcast_wave(T *dst, const T *src,
 template <typename T>
 __device__ int GDAContext::broadcast_wave(rocshmem_team_t team, T *dest,
     const T* source, int nelems, int PE_root) {
+#if defined(USE_DAS)
+  if (constmem.pxn_enabled) {
+    return broadcastmem_wave(team, dest, source, nelems * sizeof(T), PE_root);
+  }
+#endif
+
   if (dest == nullptr ||
     source == nullptr ||
     team == ROCSHMEM_TEAM_INVALID)
@@ -1090,6 +1108,13 @@ __device__ void GDAContext::internal_broadcast_wave(T *dst, const T *src,
 template <typename T>
 __device__ void GDAContext::broadcast_wg(rocshmem_team_t team, T *dst,
     const T *src, int nelems, int pe_root) {
+#if defined(USE_DAS)
+  if (constmem.pxn_enabled) {
+    // Typed and byte APIs must share the same team route and epoch handling.
+    return broadcastmem_wg_das(team, dst, src, nelems * sizeof(T), pe_root);
+  }
+#endif
+
   GDATeam *team_obj = reinterpret_cast<GDATeam *>(team);
 
   int stride = team_obj->tinfo_wrt_world->stride;
@@ -1324,6 +1349,12 @@ __device__ void GDAContext::alltoall_linear_wg(rocshmem_team_t team, T *dst,
 template <typename T>
 __device__ int GDAContext::alltoall_wave(rocshmem_team_t team,
                           T* dest, const T* source, int nelems) {
+#if defined(USE_DAS)
+  if (constmem.pxn_enabled) {
+    return alltoallmem_wave(team, dest, source, nelems * sizeof(T));
+  }
+#endif
+
   if (dest == nullptr || source == nullptr)
     return ROCSHMEM_ERROR;
 
@@ -1346,6 +1377,12 @@ __device__ void GDAContext::fcollect_wg(rocshmem_team_t team, T *dst,
 template <typename T>
 __device__ int GDAContext::fcollect_wave(rocshmem_team_t team, T *dst,
                                      const T *src, int nelems) {
+#if defined(USE_DAS)
+  if (constmem.pxn_enabled) {
+    return fcollectmem_wave(team, dst, src, nelems * sizeof(T));
+  }
+#endif
+
   if (dst == nullptr || src == nullptr || team == ROCSHMEM_TEAM_INVALID)
     return ROCSHMEM_ERROR;
 

@@ -44,6 +44,14 @@ struct constmem_t {
   int ipc_first_pe;
   int ipc_stride;    // 0 = pattern invalid (use fallback linear scan)
   int ipc_shm_size;
+  bool pxn_enabled;
+  bool world_proxy_sync_enabled;
+  bool aligned_world_proxy_data_enabled;
+  int world_proxy_node_count;
+  int world_proxy_node_first_pes[ROCSHMEM_BARRIER_SYNC_SIZE];
+  bool world_proxy_nic_layout_enabled;
+  int world_proxy_nic_count;
+  int world_proxy_pe_nic_ids[ROCSHMEM_BARRIER_SYNC_SIZE];
   uintptr_t heap_base;  // Local symmetric heap base
   size_t heap_size;     // Local symmetric heap size in bytes
 } __attribute__ ((aligned (16)));

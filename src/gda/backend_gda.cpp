@@ -30,6 +30,8 @@
 #include <cstdlib>
 #include <cassert>
 #include <algorithm>
+#include <set>
+#include <utility>
 #include <vector>
 
 #include "backend_gda.hpp"
@@ -155,6 +157,11 @@ void GDABackend::init() {
   if (!envvar::disable_mixed_ipc)
     setup_ipc();
   setup_team_shared();
+
+  // PXN routes require the IPC membership discovered above.
+  if (!envvar::disable_pxn) {
+    setup_proxy_routes();
+  }
 
   /*
    * Allocate the symmetric-registration table before contexts are created so
@@ -307,6 +314,92 @@ void GDABackend::setup_ipc() {
 
 void GDABackend::cleanup_ipc() {
   ipcImpl.ipcHostStop();
+}
+
+void GDABackend::setup_proxy_routes() {
+  if (ipcImpl.shm_size <= 0 || ipcImpl.ipc_first_pe < 0) {
+    LOG_ERROR_EXIT("PXN requires node-local IPC membership");
+  }
+
+  std::vector<std::string> selected_nics;
+  for (const auto& nic : nic_devices_) {
+    selected_nics.push_back(nic.nic_name);
+  }
+  auto local_candidates = proxy::BuildLocalNicCandidates(
+                          selected_nics, my_pe, ipcImpl.ipc_first_pe);
+
+  auto all_gather = [this](void *buffer, size_t bytes_per_pe) {
+    if (backend_comm != MPI_COMM_NULL) {
+      NET_CHECK(mpilib_ftable_.Allgather(
+          MPI_IN_PLACE, static_cast<int>(bytes_per_pe), MPI_CHAR,
+          buffer, static_cast<int>(bytes_per_pe), MPI_CHAR, backend_comm));
+    } else {
+      backend_bootstr->allGather(buffer, static_cast<int>(bytes_per_pe));
+    }
+  };
+
+  auto candidates = proxy::GatherProxyNicCandidates(
+                    local_candidates, my_pe, num_pes, all_gather);
+  auto& route_state = proxy_route_state_;
+  route_state.candidates = candidates;
+  std::map<std::pair<int, int>, proxy::ProxyRoute> sync_routes;
+
+  std::set<int> node_first_pes;
+  for (const auto& candidate : candidates) {
+    node_first_pes.insert(candidate.node_first_pe);
+  }
+
+  for (int source_node_first_pe : node_first_pes) {
+    for (int target_node_first_pe : node_first_pes) {
+      if (source_node_first_pe == target_node_first_pe) continue;
+      auto schedule = proxy::BuildProxyRouteSchedule(
+                      candidates, source_node_first_pe, target_node_first_pe);
+      if (!schedule) {
+        LOG_ERROR_EXIT("PXN found no common NIC between PE %d and PE %d",
+                       source_node_first_pe, target_node_first_pe);
+      }
+      auto route = proxy::SelectScheduledProxyRoute(schedule, 0);
+      const size_t nic_count = schedule.nic_groups.size();
+      sync_routes[{source_node_first_pe, target_node_first_pe}] = route;
+      if (my_pe == 0) {
+        LOG_INFO("PXN route plan PE %d -> PE %d: %zu matching NIC(s); "
+                 "world-sync route %s (proxy PE %d -> PE %d)",
+                 source_node_first_pe, target_node_first_pe,
+                 nic_count, route.nic_name.c_str(),
+                 route.source_proxy_pe, route.target_proxy_pe);
+        // Candidate count describes route choices, not the active data lanes.
+        size_t pair_options = 0;
+        for (const auto& group : schedule.nic_groups) {
+          pair_options += group.source_candidates.size() * group.target_candidates.size();
+        }
+        LOG_INFO("PXN candidate routes PE %d -> PE %d: %zu same-NIC "
+                 "PE pair option(s); device selects data lanes independently",
+                 source_node_first_pe, target_node_first_pe, pair_options);
+      }
+    }
+  }
+
+  auto world_layout = proxy::BuildWorldSyncLayout(candidates, sync_routes,
+                      num_pes, ROCSHMEM_BARRIER_SYNC_SIZE);
+  if (node_first_pes.size() > 1 && !world_layout) {
+    LOG_ERROR_EXIT("PXN WORLD proxy synchronization layout is unavailable");
+  }
+  route_state.world_sync_enabled = static_cast<bool>(world_layout);
+  route_state.world_node_first_pes = std::move(world_layout.node_first_pes);
+  route_state.aligned_world_data_enabled = route_state.world_sync_enabled &&
+      proxy::CanUseAlignedWorldProxyData(candidates, num_pes, ipcImpl.shm_size);
+  if (route_state.world_sync_enabled) {
+    auto data_layout = proxy::BuildWorldDataLayout(candidates, num_pes, ROCSHMEM_BARRIER_SYNC_SIZE);
+    if (data_layout) {
+      route_state.world_nic_count = static_cast<int>(data_layout.nic_names.size());
+      route_state.world_pe_nic_ids = std::move(data_layout.pe_nic_ids);
+      if (my_pe == 0) {
+        LOG_INFO("PXN WORLD NIC layout available: %d selected NIC name(s); "
+                 "device chooses same-name data lanes per operation",
+                 route_state.world_nic_count);
+      }
+    }
+  }
 }
 
 void GDABackend::setup_host_ctx() {
@@ -585,6 +678,57 @@ void GDABackend::create_new_team([[maybe_unused]] Team *parent_team,
   new (new_team_obj)
       GDATeam(this, team_info_wrt_parent, team_info_wrt_world, num_pes,
                 my_pe_in_new_team, new_team_comm, common_index);
+
+  // The team proxy protocol addresses pSync by world PE, not team rank.
+  const int64_t highest_team_pe =
+      static_cast<int64_t>(team_info_wrt_world.pe_start) +
+      static_cast<int64_t>(team_info_wrt_world.size - 1) *
+          team_info_wrt_world.stride;
+  if (!envvar::disable_pxn && !proxy_route_state_.candidates.empty() &&
+      team_info_wrt_world.size > 0 && team_info_wrt_world.stride > 0 &&
+      highest_team_pe < ROCSHMEM_BARRIER_SYNC_SIZE) {
+    auto layout = proxy::BuildInTeamProxyLayout(proxy_route_state_.candidates,
+                  team_info_wrt_world.pe_start, team_info_wrt_world.stride,
+                  team_info_wrt_world.size);
+    if (layout && layout.proxy_pe_by_node_first.size() <= ROCSHMEM_BARRIER_SYNC_SIZE) {
+      for (const auto& route : layout.proxy_pe_by_node_first) {
+        const int index = new_team_obj->in_team_proxy_node_count++;
+        new_team_obj->in_team_proxy_node_first_pes[index] = route.first;
+        new_team_obj->in_team_proxy_pes[index] = route.second;
+      }
+      if (new_team_obj->my_pe == 0) {
+        // This is a team-sync / partial-team data route. WORLD data
+        // collectives choose their NICs independently on the device.
+        LOG_INFO("PXN in-team route plan: start=%d stride=%d size=%d, "
+                 "NIC %s, %d node proxy/proxies (not WORLD data NICs)",
+                 team_info_wrt_world.pe_start, team_info_wrt_world.stride,
+                 team_info_wrt_world.size, layout.nic_name.c_str(),
+                 new_team_obj->in_team_proxy_node_count);
+      }
+    }
+  }
+  const bool is_world_team = team_info_wrt_world.pe_start == 0 &&
+                             team_info_wrt_world.stride == 1 &&
+                             team_info_wrt_world.size == this->num_pes;
+  if (!envvar::disable_pxn && !is_world_team &&
+      new_team_obj->in_team_proxy_node_count <= 1) {
+    std::set<int> participating_nodes;
+    for (const auto& candidate : proxy_route_state_.candidates) {
+      if (proxy::TeamContainsPe(team_info_wrt_world.pe_start,
+                                team_info_wrt_world.stride,
+                                team_info_wrt_world.size,
+                                candidate.proxy_pe)) {
+        participating_nodes.insert(candidate.node_first_pe);
+      }
+    }
+    if (participating_nodes.size() > 1) {
+      LOG_ERROR_EXIT("PXN team has no usable in-team proxy route: "
+                     "start=%d stride=%d size=%d",
+                     team_info_wrt_world.pe_start,
+                     team_info_wrt_world.stride,
+                     team_info_wrt_world.size);
+    }
+  }
 
   /* Ensure every PE finishes clearing the reused pSync slot before the new
    * team can issue remote signals. */

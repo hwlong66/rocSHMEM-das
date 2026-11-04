@@ -13,11 +13,70 @@
 #define LIBRARY_SRC_GDA_CONTEXT_TMPL_DEVICE_DAS_HPP_
 
 #include "device_arch.hpp"
+#if defined(USE_DAS)
+#include "gda/proxy/entry_device_das.hpp"
+#endif
 
 #include "rocshmem/rocshmem_config.h"
 
 #if defined(USE_DAS)
 namespace rocshmem {
+
+// Wave reductions share one tiled broadcast-and-fold algorithm. Every source
+// tile is captured before any in-place output is changed.
+template <typename T, ROCSHMEM_OP Op, bool ReduceScatter>
+__device__ bool GDAContext::internal_try_pxn_reduce_wave_das(rocshmem_team_t team, T *dst,
+    const T *src, int nelems) {
+  GDATeam *team_obj = reinterpret_cast<GDATeam *>(team);
+  const auto *info = team_obj->tinfo_wrt_world;
+  return internal_try_pxn_collective(team_obj, info->pe_start, info->stride, team_obj->num_pes, "reduce_wave",
+      [&] __device__ () {
+        if (proxy::SelectProxyCollectiveLayout(team_obj, info->pe_start, info->stride, team_obj->num_pes) ==
+            proxy::ProxyCollectiveLayout::None) {
+          return false;
+        }
+        constexpr size_t capacity = ROCSHMEM_REDUCE_MIN_WRKDATA_SIZE * sizeof(double) / (2 * sizeof(T));
+        T *stage = static_cast<T *>(team_obj->pWrk);
+        T *received = stage + capacity;
+        const size_t total = ReduceScatter ? static_cast<size_t>(team_obj->num_pes) * nelems : nelems;
+        const size_t wanted_begin = ReduceScatter ? static_cast<size_t>(team_obj->my_pe) * nelems : 0;
+        const size_t wanted_end = wanted_begin + nelems;
+        ActiveWFInfo wf_info(ctx_id_, ThreadScope::wave);
+        int64_t epoch = static_cast<int64_t>(team_obj->proxy_reduce_sync_epoch);
+        long *p_sync = team_obj->reduce_pSync;
+        if (total == 0) {
+          internal_dispatch_proxy_sync_wave(team_obj, p_sync, wf_info, epoch++);
+        }
+        for (size_t offset = 0; offset < total; offset += capacity) {
+          const size_t count = min(capacity, total - offset);
+          memcpy_wave<MemcpyKind::Get>(stage, const_cast<T *>(src + offset), count * sizeof(T));
+          internal_dispatch_proxy_sync_wave(team_obj, p_sync, wf_info, epoch++);
+          const size_t begin = max(offset, wanted_begin);
+          const size_t end = min(offset + count, wanted_end);
+          for (int rank = 0; rank < team_obj->num_pes; rank++) {
+            if (!internal_proxy_broadcast_wave_das(team_obj, received, stage, count * sizeof(T),
+                    team_obj->get_pe_in_world(rank), p_sync, wf_info, epoch)) {
+              return false;
+            }
+            for (size_t i = begin + get_flat_block_id() % WF_SIZE; i < end; i += WF_SIZE) {
+              T value = uncached_load(received + i - offset);
+              if (rank == 0) {
+                dst[i - wanted_begin] = value;
+              } else {
+                OpWrap<Op>::Calc(&value, dst + i - wanted_begin, 0);
+              }
+            }
+            internal_dispatch_proxy_sync_wave(team_obj, p_sync, wf_info, epoch++);
+          }
+        }
+        if (is_thread_zero_in_wave()) {
+          team_obj->proxy_reduce_sync_epoch = epoch;
+        }
+        __threadfence_system();
+        __builtin_amdgcn_wave_barrier();
+        return true;
+      });
+}
 
 // Convert a byte policy to an element count, bounded by the caller's range or
 // scratch capacity. Budgeted policies preserve single-WG and intra-node paths.
@@ -336,10 +395,22 @@ __device__ int GDAContext::reduce_das(rocshmem_team_t team, T *dest,
 
   ActiveWFInfo wf_info(ctx_id_, ThreadScope::wg);
 
-  constexpr size_t PROXY_ALLREDUCE_MIN_BYTES = 256 * 1024;
-  const int local_size = constmem.ipc_shm_size;
   const int pe_start = team_obj->tinfo_wrt_world->pe_start;
   const int stride = team_obj->tinfo_wrt_world->stride;
+  if (internal_try_pxn_collective(team_obj, pe_start, stride, PE_size, "allreduce",
+          [&] __device__ () {
+            if (proxy::SelectProxyCollectiveLayout(team_obj, pe_start, stride, PE_size) ==
+                proxy::ProxyCollectiveLayout::None) {
+              return false;
+            }
+            internal_try_pxn_sync_das(team_obj, team_obj->barrier_pSync, ThreadScope::wg);
+            return nreduce == 0 || internal_try_proxy_allreduce<T, Op>(team_obj, dest, source, nreduce, wf_info);
+          })) {
+    return ROCSHMEM_SUCCESS;
+  }
+
+  constexpr size_t PROXY_ALLREDUCE_MIN_BYTES = 256 * 1024;
+  const int local_size = constmem.ipc_shm_size;
   const bool use_proxy_allreduce = static_cast<size_t>(nreduce) * sizeof(T) >= PROXY_ALLREDUCE_MIN_BYTES &&
       stride == 1 && local_size > 1 && constmem.ipc_stride == 1 &&
       pe_start % local_size == 0 && PE_size % local_size == 0 &&
@@ -429,6 +500,20 @@ __device__ int GDAContext::reduce_scatter_wg_das(rocshmem_team_t team, T *dest,
   int local_target_pe{-1};
   const bool has_ipc = ipcImpl_.isIpcAvailable(my_pe, my_pe, &local_target_pe);
   if (elem_count < 0) elem_count = nreduce;
+  if (internal_try_pxn_collective(team_obj, PE_start, stride, PE_size, "reduce-scatter",
+          [&] __device__ () {
+            if (proxy::SelectProxyCollectiveLayout(team_obj, PE_start, stride, PE_size) ==
+                proxy::ProxyCollectiveLayout::None) {
+              return false;
+            }
+            // Publish all inputs before a proxy reads another PE's IPC mapping.
+            internal_try_pxn_sync_das(team_obj, team_obj->barrier_pSync, ThreadScope::wg);
+            return elem_count == 0 || internal_try_pxn_proxy_reduce_scatter<T, Op>(team_obj,
+                dest, source, nreduce, elem_offset, elem_count);
+          })) {
+    return ROCSHMEM_SUCCESS;
+  }
+
   const bool use_hybrid = has_ipc && local_size > 1 && stride == 1 &&
       constmem.ipc_stride == 1 && PE_start % local_size == 0 &&
       PE_size > local_size && PE_size % local_size == 0 && nreduce > 1024;
@@ -808,6 +893,30 @@ template <typename T>
 __device__ void GDAContext::alltoall_wg_das(rocshmem_team_t team, T *dst,
                                      const T *src, int nelems,
                                      int elem_offset, int elem_count) {
+  GDATeam *team_obj = reinterpret_cast<GDATeam *>(team);
+  const auto *info = team_obj->tinfo_wrt_world;
+  const int count = elem_count < 0 ? nelems : elem_count;
+  if (internal_try_pxn_collective(team_obj, info->pe_start, info->stride, team_obj->num_pes, "alltoall",
+          [&] __device__ () {
+            ActiveWFInfo wf_info(ctx_id_, ThreadScope::wg);
+            if (count == 0) {
+              if (proxy::SelectProxyCollectiveLayout(team_obj, info->pe_start, info->stride, team_obj->num_pes) ==
+                  proxy::ProxyCollectiveLayout::None) {
+                return false;
+              }
+              const int64_t epoch = static_cast<int64_t>(team_obj->proxy_alltoall_sync_epoch);
+              internal_dispatch_proxy_sync_wg(team_obj, team_obj->alltoall_pSync, wf_info, epoch);
+              if (is_thread_zero_in_block()) {
+                team_obj->proxy_alltoall_sync_epoch = epoch + 1;
+              }
+              __syncthreads();
+              return true;
+            }
+            internal_try_pxn_sync_das(team_obj, team_obj->barrier_pSync, ThreadScope::wg);
+            return internal_try_pxn_proxy_alltoall(team_obj, dst, src, nelems, elem_offset, count, wf_info);
+          })) {
+    return;
+  }
   alltoall_linear_wg_das(team, dst, src, nelems, elem_offset, elem_count);
 }
 
@@ -818,6 +927,24 @@ __device__ void GDAContext::alltoallv_das(rocshmem_team_t team,
                                       T *source, const size_t source_nelems[],
                                       const size_t source_displs[],
                                       int wg_id, int wg_count) {
+  // The on-stream launcher supplies one independent team per workgroup.
+  // Partition every PE pair exactly as the latest COPY/GET implementations do.
+  GDATeam *pxn_team = reinterpret_cast<GDATeam *>(team);
+  if (internal_try_pxn_collective(pxn_team, pxn_team->tinfo_wrt_world->pe_start,
+          pxn_team->tinfo_wrt_world->stride, pxn_team->num_pes, "alltoallv",
+          [&] __device__ () {
+            if (!proxy::IsWorldProxySyncEligible(constmem.my_pe,
+                    pxn_team->tinfo_wrt_world->pe_start,
+                    pxn_team->tinfo_wrt_world->stride, pxn_team->num_pes)) {
+              return false;
+            }
+            internal_routed_world_proxy_alltoallv(pxn_team, dest, dest_nelems,
+                dest_displs, source, source_nelems, source_displs, wg_id, wg_count);
+            return true;
+          })) {
+    return;
+  }
+
   GDATeam *team_obj = reinterpret_cast<GDATeam *>(team);
   const int pe_size = team_obj->num_pes;
   const size_t nelems = source_nelems[0];
@@ -1061,6 +1188,52 @@ __device__ void GDAContext::fcollect_linear_das(rocshmem_team_t team, T *dst,
   long *pSync = team_obj->alltoall_pSync;
   int my_pe_in_team = team_obj->my_pe;
   if (elem_count < 0) elem_count = nelems;
+
+  if (internal_try_pxn_collective(team_obj, pe_start, stride, pe_size, "fcollect",
+          [&] __device__ () {
+            if (proxy::SelectProxyCollectiveLayout(team_obj, pe_start, stride, pe_size) ==
+                proxy::ProxyCollectiveLayout::None) {
+              return false;
+            }
+            internal_try_pxn_sync_das(team_obj, team_obj->barrier_pSync, ThreadScope::wg);
+            if (elem_offset == 0 && elem_count == nelems &&
+                internal_try_hierarchical_fcollect(team_obj, dst, src, nelems)) {
+              return true;
+            }
+            // On-stream WGs retain the full destination stride while owning
+            // disjoint element ranges. Capture each input tile before writes,
+            // including in-place calls, then broadcast it once per source.
+            constexpr size_t capacity = ROCSHMEM_REDUCE_MIN_WRKDATA_SIZE * sizeof(double) / sizeof(T);
+            T *stage = reinterpret_cast<T *>(team_obj->pWrk);
+            ActiveWFInfo proxy_wf_info(ctx_id_, ThreadScope::wg);
+            int64_t epoch = static_cast<int64_t>(team_obj->proxy_fcollect_sync_epoch);
+            const int phases = proxy::TeamBroadcastPhaseCount(team_obj);
+            const int qp_row = team_obj->pool_index_ % num_qps_per_pe;
+            if (elem_count == 0) {
+              internal_dispatch_proxy_sync_wg(team_obj, pSync, proxy_wf_info, epoch++);
+            }
+            for (size_t offset = 0; offset < static_cast<size_t>(elem_count); offset += capacity) {
+              const int count = static_cast<int>(min(capacity, static_cast<size_t>(elem_count) - offset));
+              memcpy_wg<MemcpyKind::Get>(stage, const_cast<T *>(src + elem_offset + offset),
+                  static_cast<size_t>(count) * sizeof(T));
+              __threadfence_system();
+              __syncthreads();
+              internal_dispatch_proxy_sync_wg(team_obj, pSync, proxy_wf_info, epoch++);
+              for (int rank = 0; rank < pe_size; rank++) {
+                internal_broadcast(dst + static_cast<size_t>(rank) * nelems + elem_offset + offset,
+                    stage, count, team_obj->get_pe_in_world(rank), pe_start, stride, pe_size,
+                    pSync, epoch, qp_row, team_obj);
+                epoch += phases;
+              }
+            }
+            if (is_thread_zero_in_block()) {
+              team_obj->proxy_fcollect_sync_epoch = epoch;
+            }
+            __syncthreads();
+            return true;
+          })) {
+    return;
+  }
 
   ActiveWFInfo wf_info(ctx_id_, ThreadScope::wg);
 
