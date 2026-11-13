@@ -2,6 +2,12 @@
 
 Scripts for building, running, and comparing rocSHMEM performance across configurations.
 
+## Choosing a comparison tool
+
+- `perf_compare.py`: compare multiple rocSHMEM variants using statistics, latency curves, and a summary heatmap. See [comparison from existing logs](#generate-the-heatmap-from-existing-logs-no-rebuild-no-re-run).
+- [`perf_compare_general.py`](README-perf_compare_general.md): generate an Excel bandwidth report for two rocSHMEM datasets or rocSHMEM versus RCCL, with IPC/GDA, collective/RMA, and W/Z worksheets.
+- `run_perf_compare.sh`: build and run tests, then invoke `perf_compare.py`. Neither Python comparison tool runs tests itself.
+
 ## Quick-start: compare current branch vs develop
 
 The baseline is automatically set to the **merge-base** of your current branch with `origin/develop` (i.e. the common ancestor, not develop HEAD), so results reflect only the changes on your branch.
@@ -71,6 +77,12 @@ Fields in each spec (separated by `:`):
 
 ## Generate the heatmap from existing logs (no rebuild, no re-run)
 
+Run from the repository root and install the dependencies first. Compare IPC and GDA logs separately:
+
+```bash
+python3 -m pip install matplotlib numpy pandas seaborn
+```
+
 If you already have log directories from a previous run:
 
 ```bash
@@ -90,6 +102,26 @@ python3 scripts/functional_tests/perf_compare.py \
 ```
 
 The script auto-detects multiple iteration directories (glob with `*`) and aggregates them with IQR outlier removal before computing medians.
+
+| Option | Required | Description |
+|---|---|---|
+| `--baseline PATH` | Yes | Baseline log directory or directory glob |
+| `--variants NAME:PATH ...` | Yes | One or more named variant directories or globs |
+| `--baseline-label NAME` | No | Baseline display label; default: `baseline` |
+| `--outdir PATH` | No | Output directory; default: `plots/` |
+
+The parser reads logs directly in each input directory, without recursion. Tests are matched by name, PE count, W, and Z. If multiple logs share a configuration, the file with the most data rows is retained. Both six-column and eight-column rocSHMEM logs are supported. In eight-column logs, aligned bandwidth fields may be `N/A`, and MsgRate is read from the eighth column. RCCL logs are not supported by this tool.
+
+For multiple iterations, results are grouped by message size, filtered using IQR, and reduced to medians. Keep the backend, hardware, PE count, W/Z, message-size range, and test conditions consistent. The script does not automatically restrict both curves to a common message-size range.
+
+Output interpretation:
+
+- `per_test/*_latency.png`: latency versus message-size curves. `per_test/*.txt`: raw metrics and iteration statistics.
+- `heatmap_summary.png`: performance-change heatmap. Latency changes are sign-inverted for plotting so that green consistently indicates improvement.
+- `heatmap_data.csv`: percentage changes, not raw performance values. Its multi-level header contains variant and metric, with test as the row index. Values are already multiplied by 100; do not apply a spreadsheet percentage format directly.
+- `heatmap_summary.txt`: terminal summary table. Raw `bw_auc` values are currently omitted, but their percentage changes are shown.
+- `latency_us`: latency at the smallest message size. `peak_bw_gbs`: peak bandwidth. `bw_auc`: area under the bandwidth curve using `log2(msg_size)` as the horizontal axis.
+- CSV and text changes use `(variant - baseline) / abs(baseline) * 100`. Higher latency means regression; higher bandwidth or area means improvement. When the baseline is zero, the CSV currently reports 0 while the text summary reports `N/A`; this does not establish that performance is unchanged.
 
 ## Docker-based PR comparison
 
