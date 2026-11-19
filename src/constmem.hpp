@@ -48,7 +48,10 @@ struct constmem_t {
    * An IPC domain contains node-local PEs with direct IPC connectivity.
    * A physical node may contain multiple IPC domains.
    */
-  bool pxn_enabled;  // Enforce same-name NIC proxy routes when DISABLE_PXN=0.
+  bool pxn_enabled;  // Enforce configured NIC compatibility when DISABLE_PXN=0.
+  bool proxy_network_planes_enabled;
+  // [NIC-name ID] -> canonical plane ID; -1 excludes an unlisted NIC.
+  int proxy_nic_plane_ids[ROCSHMEM_BARRIER_SYNC_SIZE];
   bool world_proxy_sync_available;  // Host-validated WORLD proxy sync layout is available.
   // Corresponding PE slots in equal-sized IPC domains own matching NICs.
   bool world_proxy_aligned_data_available;

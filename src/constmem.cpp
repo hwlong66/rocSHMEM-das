@@ -50,6 +50,11 @@ void init_constant_memory(void) {
       constmem_values.world_proxy_ipc_domain_first_pes[i] = ipc_domain_first_pes[i];
     }
     auto* gda_backend = static_cast<GDABackend*>(backend);
+    constmem_values.proxy_network_planes_enabled = gda_backend->proxy_network_planes().configured;
+    const auto& plane_ids = gda_backend->proxy_nic_plane_ids();
+    for (size_t i = 0; i < plane_ids.size(); i++) {
+      constmem_values.proxy_nic_plane_ids[i] = plane_ids[i];
+    }
     constmem_values.world_proxy_nic_layout_available = gda_backend->world_proxy_nic_layout_available();
     constmem_values.world_proxy_nic_name_count = gda_backend->world_proxy_nic_name_count();
     const auto& pe_nic_name_ids = gda_backend->world_proxy_pe_nic_name_ids();

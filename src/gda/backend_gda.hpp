@@ -237,6 +237,12 @@ class GDABackend : public Backend {
   bool world_proxy_nic_layout_available() const {
     return proxy_routing_state_.has_world_nic_layout();
   }
+  const proxy::NetworkPlanePolicy& proxy_network_planes() const {
+    return proxy_routing_state_.network_planes;
+  }
+  const std::vector<int>& proxy_nic_plane_ids() const {
+    return proxy_routing_state_.nic_plane_ids;
+  }
   int world_proxy_nic_name_count() const {
     return proxy_routing_state_.world_nic_name_count;
   }

@@ -89,6 +89,20 @@ __device__ inline ProxyTeamView GetProxyTeamView(const GDATeam *team, int pe_sta
           world ? constmem.world_proxy_ipc_domain_count : (team != nullptr ? team->in_team_proxy_ipc_domain_count : 0)};
 }
 
+// All matching-mode paths share this compatibility rule. IDs are global NIC
+// names; a plane ID of -1 excludes an unlisted NIC from PXN routing.
+__device__ __forceinline__ bool AreProxyNicsCompatible(int source, int target) {
+  if (source < 0 || target < 0 || source >= constmem.world_proxy_nic_name_count ||
+      target >= constmem.world_proxy_nic_name_count) {
+    return false;
+  }
+  if (constmem.proxy_network_planes_enabled) {
+    return constmem.proxy_nic_plane_ids[source] >= 0 &&
+           constmem.proxy_nic_plane_ids[source] == constmem.proxy_nic_plane_ids[target];
+  }
+  return source == target;
+}
+
 struct ProxyDataRoute {
   int source_pe{-1};
   int target_pe{-1};
@@ -156,7 +170,7 @@ __device__ __forceinline__ ProxyDataRoute SelectProxyDataRouteImpl(const GDATeam
     return {};
   }
 
-  if (require_matching_nic && fixed_target >= 0) {
+  if (require_matching_nic && !constmem.proxy_network_planes_enabled && fixed_target >= 0) {
     if (fixed_target < target_first || fixed_target >= target_end || !IsProxyDataMember(team, fixed_target)) {
       return {};
     }
@@ -172,13 +186,17 @@ __device__ __forceinline__ ProxyDataRoute SelectProxyDataRouteImpl(const GDATeam
   }
 
   const int nics = constmem.world_proxy_nic_name_count;
-  const int pairs = require_matching_nic ? nics : nics * nics;
+  const bool diagonal = require_matching_nic && !constmem.proxy_network_planes_enabled;
+  const int pairs = diagonal ? nics : nics * nics;
   int groups = 0;
 
   for (int pair = 0; pair < pairs; pair++) {
-    const int source_nic = require_matching_nic ? pair : pair / nics;
-    const int target_nic = require_matching_nic ? pair : pair % nics;
+    const int source_nic = diagonal ? pair : pair / nics;
+    const int target_nic = diagonal ? pair : pair % nics;
     const int sources = CountProxyDataEndpoints(team, source_first, source_end, source_nic, fixed_source);
+    if (require_matching_nic && !AreProxyNicsCompatible(source_nic, target_nic)) {
+      continue;
+    }
     const int targets = CountProxyDataEndpoints(team, target_first, target_end, target_nic, fixed_target);
     groups += sources > 0 && targets > 0;
   }
@@ -191,9 +209,12 @@ __device__ __forceinline__ ProxyDataRoute SelectProxyDataRouteImpl(const GDATeam
   const uint64_t round = transfer_index / groups;
 
   for (int pair = 0; pair < pairs; pair++) {
-    const int source_nic = require_matching_nic ? pair : pair / nics;
-    const int target_nic = require_matching_nic ? pair : pair % nics;
+    const int source_nic = diagonal ? pair : pair / nics;
+    const int target_nic = diagonal ? pair : pair % nics;
     const int sources = CountProxyDataEndpoints(team, source_first, source_end, source_nic, fixed_source);
+    if (require_matching_nic && !AreProxyNicsCompatible(source_nic, target_nic)) {
+      continue;
+    }
     const int targets = CountProxyDataEndpoints(team, target_first, target_end, target_nic, fixed_target);
 
     if (sources == 0 || targets == 0) {
@@ -262,8 +283,87 @@ __device__ __forceinline__ ProxyDataRoute SelectTeamProxyDataRoute(const GDATeam
   return route;
 }
 
+// Reduction lanes need one distinct owner per domain in a common compatibility
+// group. Ordinary data transfers still balance individual NIC pairs.
+__device__ inline int CountReductionEndpoints(const GDATeam *team, int first, int end, int nic) {
+  int count = 0;
+  for (int pe = first; pe < end; pe++) {
+    count += IsProxyDataMember(team, pe) &&
+             AreProxyNicsCompatible(nic, constmem.world_proxy_pe_nic_name_ids[pe]);
+  }
+  return count;
+}
+
+__device__ inline int SelectReductionEndpoint(const GDATeam *team, int first, int end, int nic, uint64_t ordinal) {
+  for (int pe = first; pe < end; pe++) {
+    if (IsProxyDataMember(team, pe) && AreProxyNicsCompatible(nic, constmem.world_proxy_pe_nic_name_ids[pe])) {
+      if (ordinal-- == 0) {
+        return pe;
+      }
+    }
+  }
+  return -1;
+}
+
+// Select one domain endpoint in a plane shared by every domain in the view.
+__device__ inline __noinline__ int SelectDomainProxyOnCommonPlane(const ProxyTeamView &view, int domain,
+                                                                   uint64_t operation) {
+  // All selected domain endpoints must belong to one common plane.
+  const int nics = constmem.world_proxy_nic_name_count;
+  int groups = 0;
+  for (int pass = 0; pass < 2; pass++) {
+    int selected = groups > 0 ? operation % groups : 0;
+    for (int nic = 0; nic < nics; nic++) {
+      bool first_in_plane = constmem.proxy_nic_plane_ids[nic] >= 0;
+      for (int previous = 0; previous < nic; previous++) {
+        first_in_plane &= !AreProxyNicsCompatible(nic, previous);
+      }
+      if (!first_in_plane) {
+        continue;
+      }
+      bool common = true;
+      for (int d = 0; d < view.ipc_domain_count; d++) {
+        const int first = view.domain_first(d);
+        common &= CountReductionEndpoints(view.team, first, WorldProxyIpcDomainEnd(first), nic) > 0;
+      }
+      if (!common) {
+        continue;
+      }
+      if (pass == 0) {
+        groups++;
+        continue;
+      }
+      if (selected-- != 0) {
+        continue;
+      }
+      const int first = view.domain_first(domain);
+      const int end = WorldProxyIpcDomainEnd(first);
+      int local_nics = 0;
+      for (int candidate = 0; candidate < nics; candidate++) {
+        local_nics += AreProxyNicsCompatible(nic, candidate) &&
+                      CountProxyDataEndpoints(view.team, first, end, candidate, -1) > 0;
+      }
+      const uint64_t round = operation / groups;
+      int local_selected = round % local_nics;
+      for (int candidate = 0; candidate < nics; candidate++) {
+        const int count = CountProxyDataEndpoints(view.team, first, end, candidate, -1);
+        if (count > 0 && AreProxyNicsCompatible(nic, candidate) && local_selected-- == 0) {
+          return SelectProxyDataEndpoint(view.team, first, end, candidate, -1, (round / local_nics) % count);
+        }
+      }
+    }
+    if (groups == 0) {
+      return -1;
+    }
+  }
+  return -1;
+}
+
 // Packing/reduction owners are data proxies, independent of fixed sync proxies.
 __device__ inline int SelectCollectiveDomainProxy(const ProxyTeamView &view, int domain, uint64_t operation) {
+  if (constmem.proxy_network_planes_enabled) {
+    return SelectDomainProxyOnCommonPlane(view, domain, operation);
+  }
   const int first = view.domain_first(0);
   const int peer = view.domain_first(domain == 0 ? 1 : domain);
   const auto route = SelectTeamProxyDataRoute(view.team, first, peer, operation);
@@ -293,6 +393,14 @@ struct WorldAlltoallTargetAssignment {
  */
 __device__ __forceinline__ WorldAlltoallTargetAssignment SelectWorldAlltoallTargetAssignment(
     int source_ipc_domain_first_pe, int target_ipc_domain_first_pe, int target_pe, uint64_t operation_index = 0) {
+  if (constmem.proxy_network_planes_enabled) {
+    const auto route = SelectProxyDataRoute({nullptr, source_ipc_domain_first_pe,
+        WorldProxyIpcDomainEnd(source_ipc_domain_first_pe), target_ipc_domain_first_pe,
+        WorldProxyIpcDomainEnd(target_ipc_domain_first_pe), true, -1, target_pe}, operation_index + target_pe);
+    // Different NIC groups may have unequal endpoint counts. Give each target
+    // its own batch so two targets can never overwrite one source's scratch.
+    return {route.source_pe, route.source_pe < 0 ? -1 : target_pe - target_ipc_domain_first_pe};
+  }
   const int nic_name_id = constmem.world_proxy_pe_nic_name_ids[target_pe];
   const int source_end = WorldProxyIpcDomainEnd(source_ipc_domain_first_pe);
   const int source_count = CountNicProxies(source_ipc_domain_first_pe, source_end, nic_name_id);
@@ -358,11 +466,20 @@ __device__ inline __noinline__ const int *GDAContext::internal_build_reduction_p
       for (int round = 0; round < constmem.num_pes && lane_count < requested_lanes; round++) {
         for (int turn = 0; turn < nics && lane_count < requested_lanes; turn++) {
           const int nic = (operation + turn) % nics;
+          bool repeated_group = false;
+          if (constmem.proxy_network_planes_enabled) {
+            for (int previous = 0; previous < turn; previous++) {
+              repeated_group |= proxy::AreProxyNicsCompatible(nic, (operation + previous) % nics);
+            }
+            if (repeated_group || constmem.proxy_nic_plane_ids[nic] < 0) {
+              continue;
+            }
+          }
           int endpoints = constmem.num_pes;
           for (int domain = 0; domain < view.ipc_domain_count; domain++) {
             const int first = view.domain_first(domain);
-            endpoints = min(endpoints, proxy::CountProxyDataEndpoints(team_obj, first,
-                                                          proxy::WorldProxyIpcDomainEnd(first), nic, -1));
+            endpoints = min(endpoints, proxy::CountReductionEndpoints(team_obj, first,
+                                                          proxy::WorldProxyIpcDomainEnd(first), nic));
           }
 
           if (round >= endpoints || (lane_count + 1) * view.ipc_domain_count > ROCSHMEM_BARRIER_SYNC_SIZE) {
@@ -371,10 +488,10 @@ __device__ inline __noinline__ const int *GDAContext::internal_build_reduction_p
 
           for (int domain = 0; domain < view.ipc_domain_count; domain++) {
             const int first = view.domain_first(domain);
-            const int count = proxy::CountProxyDataEndpoints(team_obj, first,
-                                         proxy::WorldProxyIpcDomainEnd(first), nic, -1);
-            owners[domain * requested_lanes + lane_count] = proxy::SelectProxyDataEndpoint(
-                team_obj, first, proxy::WorldProxyIpcDomainEnd(first), nic, -1, (operation / nics + round) % count);
+            const int count = proxy::CountReductionEndpoints(team_obj, first,
+                                         proxy::WorldProxyIpcDomainEnd(first), nic);
+            owners[domain * requested_lanes + lane_count] = proxy::SelectReductionEndpoint(
+                team_obj, first, proxy::WorldProxyIpcDomainEnd(first), nic, (operation / nics + round) % count);
           }
           lane_count++;
         }
