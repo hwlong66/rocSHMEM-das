@@ -27,9 +27,8 @@
 
 #include <dlfcn.h>
 #include <map>
-#include "gda/proxy/candidate.hpp"
-#include "gda/proxy/layout.hpp"
-#include "gda/proxy/route_plan_host.hpp"
+#include "gda/proxy/candidate_host.hpp"
+#include "gda/proxy/layout_host.hpp"
 #include <map>
 #include <vector>
 #include "ibv_core.hpp"
@@ -153,6 +152,7 @@ class GDABackend : public Backend {
   std::vector<NicDevice> nic_devices_;
   int num_nics_{0};
   proxy::ProxyRoutingState proxy_routing_state_;
+  std::vector<proxy::ProxyExchangeInfo> proxy_exchange_info_;
 
   uint32_t inline_threshold = 8;
   QueuePair *host_qps = nullptr;
@@ -237,12 +237,22 @@ class GDABackend : public Backend {
   bool world_proxy_nic_layout_available() const {
     return proxy_routing_state_.has_world_nic_layout();
   }
+  const proxy::NetworkPlanePolicy& proxy_network_planes() const {
+    return proxy_routing_state_.network_planes;
+  }
+  const std::vector<int>& proxy_nic_plane_ids() const {
+    return proxy_routing_state_.nic_plane_ids;
+  }
   int world_proxy_nic_name_count() const {
     return proxy_routing_state_.world_nic_name_count;
   }
   const std::vector<int>& world_proxy_pe_nic_name_ids() const {
     return proxy_routing_state_.world_pe_nic_name_ids;
   }
+  const std::vector<int>& world_proxy_sync_pes() const {
+    return proxy_routing_state_.world_sync_proxy_pes;
+  }
+
   const std::vector<int>& world_proxy_ipc_domain_first_pes() const {
     return proxy_routing_state_.world_ipc_domain_first_pes;
   }
@@ -581,6 +591,8 @@ class GDABackend : public Backend {
    */
   void setup_fence_buffer();
 
+  // Preserve the heap-rkey setup flow while piggybacking proxy discovery.
+  void exchange_heap_rkeys_and_metadata(uint32_t *rkeys, size_t rkeys_per_pe);
   void setup_heap_memory_rkey();
   void cleanup_heap_memory_rkey();
 

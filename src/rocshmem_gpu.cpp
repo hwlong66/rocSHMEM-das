@@ -2082,12 +2082,11 @@ __global__ ATTR_NO_INLINE void rocshmem_fcollect_on_stream_multi_wg_kernel(
 
 /**
  * Multi-workgroup reduce kernel. Each workgroup uses a duplicate team and
- * reduces one or more contiguous element ranges.
+ * reduces its contiguous element range; the device algorithm handles tiling.
  */
 template <typename T, ROCSHMEM_OP Op>
 __global__ ATTR_NO_INLINE void rocshmem_reduce_on_stream_multi_wg_kernel(
-    rocshmem_team_t *teams, T *dest, const T *source, int nreduce,
-    size_t elems_per_chunk) {
+    rocshmem_team_t *teams, T *dest, const T *source, int nreduce) {
   __shared__ rocshmem_ctx_t ctx;
   const int wg_id = get_flat_grid_id();
   const int wg_count = get_grid_num_blocks();
@@ -2098,18 +2097,10 @@ __global__ ATTR_NO_INLINE void rocshmem_reduce_on_stream_multi_wg_kernel(
   size_t elem_count = 0;
   split_wg_range(static_cast<size_t>(nreduce), wg_id, wg_count,
                  &elem_offset, &elem_count);
-  // Partition first, then bound each communication operation independently.
-  for (size_t offset = 0; offset < elem_count;) {
-    const size_t remaining = elem_count - offset;
-    const size_t chunk_elems = remaining < elems_per_chunk
-                                  ? remaining : elems_per_chunk;
-    const size_t chunk_start = elem_offset + offset;
-    const int actual_chunk = static_cast<int>(chunk_elems);
-    rocshmem_reduce_wg<T, Op>(ctx, teams[wg_id],
-                               dest + chunk_start,
-                               source + chunk_start,
-                               actual_chunk);
-    offset += chunk_elems;
+  // IPC and GDA bound scratch usage inside their reduction algorithms.
+  if (elem_count > 0) {
+    rocshmem_reduce_wg<T, Op>(ctx, teams[wg_id], dest + elem_offset,
+                             source + elem_offset, static_cast<int>(elem_count));
   }
 
   rocshmem_wg_ctx_destroy(&ctx);
@@ -2123,8 +2114,7 @@ __global__ ATTR_NO_INLINE void rocshmem_reduce_on_stream_multi_wg_kernel(
                                                                 int nreduce); \
     template \
     __global__ ATTR_NO_INLINE void rocshmem_reduce_on_stream_multi_wg_kernel<T, Op_API>( \
-        rocshmem_team_t *teams, T *dest, const T *source, int nreduce, \
-        size_t elems_per_chunk); \
+        rocshmem_team_t *teams, T *dest, const T *source, int nreduce); \
 
 #define REDUCTION_ON_STREAM_KERNEL_DEF_GEN_ARITH(T, TNAME) \
     REDUCTION_ON_STREAM_KERNEL_DEF_GEN(T, TNAME, sum, ROCSHMEM_SUM) \

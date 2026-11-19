@@ -7,70 +7,6 @@
 
 namespace rocshmem {
 
-namespace proxy {
-
-/**
- * @brief Check whether every target has a proxy and the scratch fits.
- *
- * Direct means target-selected proxy routing, not bypassing the proxy.
- * @param elem_bytes Size of one element in bytes.
- * @return true when the direct WORLD proxy all-to-all path is usable.
- */
-__device__ __forceinline__ bool CanUseDirectWorldProxyAlltoall(size_t elem_bytes) {
-  if (!constmem.world_proxy_nic_layout_available) {
-    return false;
-  }
-
-  int max_local_pe_count = 0;
-  int max_batches = 0;
-
-  for (int source = 0; source < constmem.world_proxy_ipc_domain_count; source++) {
-    const int source_ipc_domain_first_pe = constmem.world_proxy_ipc_domain_first_pes[source];
-    max_local_pe_count =
-        max(max_local_pe_count, WorldProxyIpcDomainEnd(source_ipc_domain_first_pe) - source_ipc_domain_first_pe);
-    for (int target = 0; target < constmem.world_proxy_ipc_domain_count; target++) {
-      if (source == target) {
-        continue;
-      }
-      const int target_ipc_domain_first_pe = constmem.world_proxy_ipc_domain_first_pes[target];
-      const int target_end = WorldProxyIpcDomainEnd(target_ipc_domain_first_pe);
-      for (int pe = target_ipc_domain_first_pe; pe < target_end; pe++) {
-        const int batch = SelectWorldAlltoallTargetAssignment(source_ipc_domain_first_pe,
-                                            target_ipc_domain_first_pe, pe).scratch_batch;
-        if (batch < 0) {
-          return false;
-        }
-        max_batches = max(max_batches, batch + 1);
-      }
-    }
-  }
-
-  const size_t scratch_elements = ROCSHMEM_REDUCE_MIN_WRKDATA_SIZE * sizeof(double) / elem_bytes;
-  return max_batches > 0 && max_local_pe_count <= scratch_elements / max_batches;
-}
-
-/** @brief Return scratch batches required by a target IPC domain. */
-__device__ __forceinline__ int WorldAlltoallScratchBatchCount(int target_ipc_domain_first_pe) {
-  int batches = 0;
-  const int target_end = WorldProxyIpcDomainEnd(target_ipc_domain_first_pe);
-
-  for (int source = 0; source < constmem.world_proxy_ipc_domain_count; source++) {
-    const int source_ipc_domain_first_pe = constmem.world_proxy_ipc_domain_first_pes[source];
-    if (source_ipc_domain_first_pe == target_ipc_domain_first_pe) {
-      continue;
-    }
-    for (int pe = target_ipc_domain_first_pe; pe < target_end; pe++) {
-      const auto assignment = SelectWorldAlltoallTargetAssignment(source_ipc_domain_first_pe,
-                                                                  target_ipc_domain_first_pe, pe);
-      batches = max(batches, assignment.scratch_batch + 1);
-    }
-  }
-
-  return batches;
-}
-
-}  // namespace proxy
-
 /**
  * @brief Try the eligible PXN all-to-all algorithm before the original path.
  *
@@ -98,12 +34,15 @@ __device__ bool GDAContext::internal_alltoall_wg_pxn(GDATeam *team_obj, T *dst, 
   }
 
   // None was rejected above; reuse the classified membership instead of checking it again.
-  const bool world =
-      layout == proxy::ProxyCollectiveLayout::WorldAlignedData || layout == proxy::ProxyCollectiveLayout::WorldSyncOnly;
+  const bool world = layout == proxy::ProxyCollectiveLayout::WorldAlignedData ||
+                     layout == proxy::ProxyCollectiveLayout::WorldSyncOnly;
   // Full WORLD mappings permit directed destination-owned transfers. The
   // same row-streaming fallback handles every team without that capability.
-  if (world && proxy::CanUseDirectWorldProxyAlltoall(sizeof(T))) {
-    internal_alltoall_wg_routed_world_proxy_pxn(team_obj, dst, src, nelems, elem_offset, elem_count, wf_info);
+  const auto *plan = world ? internal_build_alltoall_proxy_plan_wg(team_obj, constmem.ipc_first_pe) : nullptr;
+  const size_t scratch_elements = ROCSHMEM_REDUCE_MIN_WRKDATA_SIZE * sizeof(double) / sizeof(T);
+  if (plan != nullptr && plan->valid &&
+      static_cast<size_t>(plan->max_local_pe_count) <= scratch_elements / plan->max_batches) {
+    internal_alltoall_wg_routed_world_proxy_pxn(team_obj, dst, src, nelems, elem_offset, elem_count, wf_info, *plan);
   } else {
     internal_alltoall_wg_rows_pxn(team_obj, dst, src, nelems, elem_offset, elem_count);
   }
@@ -183,26 +122,19 @@ template <typename T>
 __device__ __noinline__ void GDAContext::internal_alltoall_wg_routed_world_proxy_pxn(GDATeam *team_obj, T *dst,
                                                                                  const T *src, int nelems,
                                                                                  int elem_offset, int elem_count,
-                                                                                 ActiveWFInfo &wf_info) {
+                                                                                 ActiveWFInfo &wf_info,
+                                                                                 const proxy::WorldAlltoallPlan &plan) {
   const int my_pe = constmem.my_pe;
   const int source_ipc_domain_first_pe = constmem.ipc_first_pe;
   const int source_size = constmem.ipc_shm_size;
   T *scratch = reinterpret_cast<T *>(team_obj->pWrk);
   long *p_sync = team_obj->alltoall_pSync;
-  int max_local_pe_count = 0;
-  int max_batches = 0;
-  for (int ipc_domain = 0; ipc_domain < constmem.world_proxy_ipc_domain_count; ipc_domain++) {
-    const int first = constmem.world_proxy_ipc_domain_first_pes[ipc_domain];
-    max_local_pe_count = max(max_local_pe_count, proxy::WorldProxyIpcDomainEnd(first) - first);
-    max_batches = max(max_batches, proxy::WorldAlltoallScratchBatchCount(first));
-  }
-
   const size_t scratch_bytes = ROCSHMEM_REDUCE_MIN_WRKDATA_SIZE * sizeof(double);
-  const int tile_capacity = static_cast<int>(scratch_bytes / (max_local_pe_count * max_batches * sizeof(T)));
+  const int tile_capacity = static_cast<int>(
+      scratch_bytes / (static_cast<size_t>(plan.max_local_pe_count) * plan.max_batches * sizeof(T)));
   int64_t sync_epoch = static_cast<int64_t>(team_obj->proxy_alltoall_sync_epoch + 1);
-
-  const int *source_proxies = internal_build_alltoall_routes_wg(team_obj, source_ipc_domain_first_pe);
-  const int *scratch_batches = source_proxies + ROCSHMEM_BARRIER_SYNC_SIZE;
+  const int *source_proxies = plan.source_proxies;
+  const int *scratch_batches = plan.scratch_batches;
 
   // Within an IPC domain, the source writes directly to each local target.
   for (int slot = 0; slot < source_size; slot++) {
@@ -222,7 +154,7 @@ __device__ __noinline__ void GDAContext::internal_alltoall_wg_routed_world_proxy
   for (int ipc_domain = 0; ipc_domain < constmem.world_proxy_ipc_domain_count; ipc_domain++) {
     const int target_ipc_domain_first_pe = constmem.world_proxy_ipc_domain_first_pes[ipc_domain];
     const int target_end = proxy::WorldProxyIpcDomainEnd(target_ipc_domain_first_pe);
-    const int batches = proxy::WorldAlltoallScratchBatchCount(target_ipc_domain_first_pe);
+    const int batches = plan.domain_batches[ipc_domain];
     for (int batch = 0; batch < batches; batch++) {
       for (int offset = elem_offset; offset < elem_offset + elem_count; offset += tile_capacity) {
         const int count = min(tile_capacity, elem_offset + elem_count - offset);
@@ -230,14 +162,12 @@ __device__ __noinline__ void GDAContext::internal_alltoall_wg_routed_world_proxy
 
         if (source_ipc_domain_first_pe != target_ipc_domain_first_pe) {
           for (int target_pe = target_ipc_domain_first_pe; target_pe < target_end; target_pe++) {
-            const proxy::WorldAlltoallTargetAssignment assignment{source_proxies[target_pe],
-                                                                  scratch_batches[target_pe]};
-            if (assignment.scratch_batch != batch || assignment.source_proxy_pe != my_pe) {
+            if (scratch_batches[target_pe] != batch || source_proxies[target_pe] != my_pe) {
               continue;
             }
             for (int slot = 0; slot < source_size; slot++) {
               const int source_pe = source_ipc_domain_first_pe + slot;
-              T *stage = scratch + (batch * max_local_pe_count + slot) * tile_capacity;
+              T *stage = scratch + (batch * plan.max_local_pe_count + slot) * tile_capacity;
               const T *source = src + target_pe * nelems + offset;
               if (source_pe == my_pe) {
                 memcpy_wg<MemcpyKind::Put>(stage, const_cast<T *>(source), bytes);
@@ -252,9 +182,7 @@ __device__ __noinline__ void GDAContext::internal_alltoall_wg_routed_world_proxy
 
         if (source_ipc_domain_first_pe != target_ipc_domain_first_pe) {
           for (int target_pe = target_ipc_domain_first_pe; target_pe < target_end; target_pe++) {
-            const proxy::WorldAlltoallTargetAssignment assignment{source_proxies[target_pe],
-                                                                  scratch_batches[target_pe]};
-            if (assignment.scratch_batch != batch || assignment.source_proxy_pe != my_pe) {
+            if (scratch_batches[target_pe] != batch || source_proxies[target_pe] != my_pe) {
               continue;
             }
 
@@ -263,7 +191,7 @@ __device__ __noinline__ void GDAContext::internal_alltoall_wg_routed_world_proxy
             for (int slot = 0; slot < source_size; slot++) {
               const int source_pe = source_ipc_domain_first_pe + slot;
               T *target = dst + source_pe * nelems + offset;
-              const T *stage = scratch + (batch * max_local_pe_count + slot) * tile_capacity;
+              const T *stage = scratch + (batch * plan.max_local_pe_count + slot) * tile_capacity;
               internal_proxy_putmem_wg(target, stage, bytes, target_pe, 0, wf_info);
             }
           }

@@ -97,9 +97,9 @@ __device__ __noinline__ int64_t GDAContext::internal_alltoallv_wg_world_proxy_pa
   const int pe_size = constmem.num_pes;
   const int proxy_qp_row = team_obj->pool_index_ % num_qps_per_pe;
   const size_t metadata_bytes = static_cast<size_t>(pe_size) * sizeof(size_t);
-  // The host limits WORLD proxy synchronization to this many PEs.
+  // Proxy routing bounds the largest supported WORLD count table.
   // Even the largest supported count table leaves room for a payload element.
-  static_assert(ROCSHMEM_BARRIER_SYNC_SIZE * sizeof(size_t) + sizeof(T) <= kWorkspaceBytes / 2,
+  static_assert(ROCSHMEM_PROXY_MAX_PES * sizeof(size_t) + sizeof(T) <= kWorkspaceBytes / 2,
                 "WORLD alltoallv needs room for counts and payload");
   size_t *row_counts = reinterpret_cast<size_t *>(workspace + kWorkspaceBytes - metadata_bytes);
   const size_t row_capacity = (half_bytes - metadata_bytes) / sizeof(T);

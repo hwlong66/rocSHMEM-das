@@ -63,6 +63,9 @@ __device__ __noinline__ void GDAContext::internal_reduce_wg_proxy_nopxn(T *dst, 
   const int proxies = static_cast<int>(min(static_cast<size_t>(local_size), useful_proxies));
   const int proxy_chunk = (nelems + proxies - 1) / proxies;
 
+  // Peer input may be updated in place immediately before this collective.
+  internal_sync_wg(constmem.my_pe, pe_start, 1, pe_size, p_sync, wf_info);
+
   if (local_slot < proxies) {
     const int begin = local_slot * proxy_chunk;
     const int count = min(proxy_chunk, nelems - begin);
@@ -86,6 +89,8 @@ __device__ __noinline__ void GDAContext::internal_reduce_wg_proxy_nopxn(T *dst, 
         const uint32_t qp_row = static_cast<uint32_t>(blockIdx.x) % num_qps_per_pe;
         const int qp_index = qp_row * constmem.num_pes + remote_proxy;
         internal_getmem_wg(p_wrk, dst + begin + offset, static_cast<size_t>(tile) * sizeof(T), remote_proxy, qp_index, wf_info);
+        // The network GET completes on thread zero; all workers must wait before reading scratch.
+        __syncthreads();
         gda_compute_reduce<T, Op>(p_wrk, dst + begin + offset, tile, wg_id, wg_size);
       }
     }
@@ -214,7 +219,7 @@ __device__ __noinline__ void GDAContext::internal_reduce_wg_ipc_domain_pxn(GDATe
   const size_t wanted_end = wanted_begin + nelems;
   const uint64_t operation = team_obj->proxy_data_route_sequence + team_obj->pool_index_;
   const size_t total_bytes = range.total_elements * sizeof(T);
-  const int requested = min(min(8, ROCSHMEM_BARRIER_SYNC_SIZE / view.ipc_domain_count),
+  const int requested = min(min(8, ROCSHMEM_PROXY_PLAN_CAPACITY / view.ipc_domain_count),
                             static_cast<int>(max(size_t{1}, (total_bytes + 65535) / 65536)));
   int lanes = 0;
   const int *owners = internal_build_reduction_proxy_plan_wg(team_obj, operation, requested, lanes);
@@ -234,6 +239,7 @@ __device__ __noinline__ void GDAContext::internal_reduce_wg_ipc_domain_pxn(GDATe
   if (local_domain < 0) {
     LOGD_ERROR_ABORT("PXN reduction has no local IPC domain");
   }
+  const auto local_members = proxy::GetProxyDomainMembers(view, local_domain);
 
   const int tid = get_flat_block_id();
   const int block_size = get_flat_block_size();
@@ -261,11 +267,8 @@ __device__ __noinline__ void GDAContext::internal_reduce_wg_ipc_domain_pxn(GDATe
                                          ipcImpl_.shm_rank, tid, block_size);
       } else if (count > 0) {
         bool first = true;
-        for (int rank = 0; rank < team_obj->num_pes; rank++) {
-          const int member = team_obj->get_pe_in_world(rank);
-          if (member < constmem.ipc_first_pe || member >= proxy::WorldProxyIpcDomainEnd(constmem.ipc_first_pe)) {
-            continue;
-          }
+        for (int local_rank = 0; local_rank < local_members.count; local_rank++) {
+          const int member = team_obj->get_pe_in_world(local_members.first_rank + local_rank);
           T *input = const_cast<T *>(source + offset);
           if (member != constmem.my_pe) {
             int local_slot = -1;

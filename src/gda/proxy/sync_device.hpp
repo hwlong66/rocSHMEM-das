@@ -10,8 +10,23 @@
 
 namespace rocshmem {
 
+// Notify the local proxy, then wait for its release. Caller must be a non-proxy PE.
+__device__ inline void GDAContext::internal_proxy_arrive_and_wait(
+    int pe, int local_proxy, int64_t *p_sync, ActiveWFInfo &wf_info,
+    int64_t epoch, int qp_offset) {
+  // Reserve slot 0 for release on both sender and receiver; the proxy has no self-arrival.
+  const int arrival_slot = pe == 0 ? local_proxy : pe;
+  p_sync[arrival_slot] = epoch;
+  __threadfence_system();
+  internal_putmem(&p_sync[arrival_slot], &p_sync[arrival_slot], sizeof(epoch), local_proxy,
+                  qp_offset + local_proxy, wf_info);
+  p_sync[arrival_slot] = ROCSHMEM_SYNC_VALUE;
+  wait_until(&p_sync[0], ROCSHMEM_CMP_EQ, epoch);
+  p_sync[0] = ROCSHMEM_SYNC_VALUE;
+}
+
 /**
- * @brief Synchronize WORLD PEs through one same-NIC proxy per IPC domain.
+ * @brief Synchronize WORLD PEs through one policy-compatible proxy per IPC domain.
  *
  * @param pe Calling world PE.
  * @param PE_size WORLD team size.
@@ -33,39 +48,33 @@ __device__ void GDAContext::internal_world_proxy_sync_thread(int pe, [[maybe_unu
                                                                 : static_cast<int>(blockIdx.x) % num_qps_per_pe;
   const int qp_row_offset = qp_row * constmem.num_pes;
 
-  // Eligibility guarantees that the first PE owns the selected NIC route.
-  // Arbitrary-team proxies are not necessarily first PEs.
-  const int local_proxy_pe = constmem.ipc_first_pe;
+  const int local_proxy_pe = proxy::GetValidatedDomainProxy(nullptr, constmem.ipc_first_pe);
+  const int root_proxy_pe = constmem.world_proxy_sync_pes[0];
   const int64_t arrived = epoch;
 
   if (pe != local_proxy_pe) {
-    // RDMA sources must live in the registered symmetric heap, not a GPU
-    // thread's private stack. The same pSync slot also works for IPC puts.
-    pSync[pe] = arrived;
-    __threadfence_system();
-    internal_putmem(&pSync[pe], &pSync[pe], sizeof(arrived), local_proxy_pe, qp_row_offset + local_proxy_pe, wf_info);
-    pSync[pe] = ROCSHMEM_SYNC_VALUE;
-    wait_until(&pSync[0], ROCSHMEM_CMP_EQ, arrived);
-    pSync[0] = ROCSHMEM_SYNC_VALUE;
+    internal_proxy_arrive_and_wait(pe, local_proxy_pe, pSync, wf_info, arrived, qp_row_offset);
   } else {
     // Stage 1: collect all local participants before an IPC domain reports ready.
-    for (int local_pe = local_proxy_pe + 1; local_pe < local_proxy_pe + local_pe_count; local_pe++) {
-      wait_until(&pSync[local_pe], ROCSHMEM_CMP_EQ, arrived);
-      pSync[local_pe] = ROCSHMEM_SYNC_VALUE;
+    for (int local_pe = constmem.ipc_first_pe; local_pe < constmem.ipc_first_pe + local_pe_count; local_pe++) {
+      if (local_pe == local_proxy_pe) continue;
+      const int arrival_slot = local_pe == 0 ? local_proxy_pe : local_pe;
+      wait_until(&pSync[arrival_slot], ROCSHMEM_CMP_EQ, arrived);
+      pSync[arrival_slot] = ROCSHMEM_SYNC_VALUE;
     }
     __threadfence_system();
 
-    if (local_proxy_pe != 0) {
-      // Stage 2: only proxies with matching NICs exchange signals between IPC domains.
+    if (local_proxy_pe != root_proxy_pe) {
+      // Stage 2: only proxies with compatible NICs exchange signals between IPC domains.
       pSync[local_proxy_pe] = arrived;
       __threadfence_system();
-      internal_putmem(&pSync[local_proxy_pe], &pSync[local_proxy_pe], sizeof(arrived), 0, qp_row_offset, wf_info);
+      internal_putmem(&pSync[local_proxy_pe], &pSync[local_proxy_pe], sizeof(arrived), root_proxy_pe, qp_row_offset + root_proxy_pe, wf_info);
       pSync[local_proxy_pe] = ROCSHMEM_SYNC_VALUE;
       wait_until(&pSync[0], ROCSHMEM_CMP_EQ, arrived);
       pSync[0] = ROCSHMEM_SYNC_VALUE;
     } else {
       for (int ipc_domain = 1; ipc_domain < constmem.world_proxy_ipc_domain_count; ipc_domain++) {
-        const int remote_proxy_pe = constmem.world_proxy_ipc_domain_first_pes[ipc_domain];
+        const int remote_proxy_pe = constmem.world_proxy_sync_pes[ipc_domain];
         wait_until(&pSync[remote_proxy_pe], ROCSHMEM_CMP_EQ, arrived);
         pSync[remote_proxy_pe] = ROCSHMEM_SYNC_VALUE;
       }
@@ -73,7 +82,7 @@ __device__ void GDAContext::internal_world_proxy_sync_thread(int pe, [[maybe_unu
       pSync[0] = arrived;
       __threadfence_system();
       for (int ipc_domain = 1; ipc_domain < constmem.world_proxy_ipc_domain_count; ipc_domain++) {
-        const int remote_proxy_pe = constmem.world_proxy_ipc_domain_first_pes[ipc_domain];
+        const int remote_proxy_pe = constmem.world_proxy_sync_pes[ipc_domain];
         internal_putmem(&pSync[0], &pSync[0], sizeof(arrived), remote_proxy_pe, qp_row_offset + remote_proxy_pe,
                         wf_info);
       }
@@ -82,7 +91,8 @@ __device__ void GDAContext::internal_world_proxy_sync_thread(int pe, [[maybe_unu
     pSync[0] = arrived;
     __threadfence_system();
     // Stage 3: release all local participants through IPC.
-    for (int local_pe = local_proxy_pe + 1; local_pe < local_proxy_pe + local_pe_count; local_pe++) {
+    for (int local_pe = constmem.ipc_first_pe; local_pe < constmem.ipc_first_pe + local_pe_count; local_pe++) {
+      if (local_pe == local_proxy_pe) continue;
       internal_putmem(&pSync[0], &pSync[0], sizeof(arrived), local_pe, qp_row_offset + local_pe, wf_info);
     }
     pSync[0] = ROCSHMEM_SYNC_VALUE;
@@ -131,20 +141,16 @@ __device__ void GDAContext::internal_team_proxy_sync_thread(GDATeam *team_obj, i
   const int qp_offset = qp_row * constmem.num_pes;
 
   if (my_pe != local_proxy) {
-    pSync[my_pe] = epoch;
-    __threadfence_system();
-    internal_putmem(&pSync[my_pe], &pSync[my_pe], sizeof(epoch), local_proxy, qp_offset + local_proxy, wf_info);
-    pSync[my_pe] = ROCSHMEM_SYNC_VALUE;
-    wait_until(&pSync[0], ROCSHMEM_CMP_EQ, epoch);
-    pSync[0] = ROCSHMEM_SYNC_VALUE;
+    internal_proxy_arrive_and_wait(my_pe, local_proxy, pSync, wf_info, epoch, qp_offset);
   } else {
     for (int rank = 0; rank < team_obj->num_pes; rank++) {
       const int member = team_obj->get_pe_in_world(rank);
       if (member == local_proxy || member < ipc_domain_first_pe || member >= ipc_domain_end_pe) {
         continue;
       }
-      wait_until(&pSync[member], ROCSHMEM_CMP_EQ, epoch);
-      pSync[member] = ROCSHMEM_SYNC_VALUE;
+      const int arrival_slot = member == 0 ? local_proxy : member;
+      wait_until(&pSync[arrival_slot], ROCSHMEM_CMP_EQ, epoch);
+      pSync[arrival_slot] = ROCSHMEM_SYNC_VALUE;
     }
     __threadfence_system();
 

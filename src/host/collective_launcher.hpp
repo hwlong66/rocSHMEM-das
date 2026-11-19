@@ -168,9 +168,6 @@ class CollectiveLauncher {
   static constexpr size_t kMultiBlockThreshold = 256 * 1024;
   static constexpr size_t kBytesPerWg = 32 * 1024;
 
-  // Algorithm chunking is independent of launch selection granularity.
-  static constexpr size_t kChunkSize = 256 * 1024;
-
   static int wavefront_threads() {
     int device_id = 0;
     CHECK_HIP(hipGetDevice(&device_id));

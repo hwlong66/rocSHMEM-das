@@ -44,12 +44,21 @@ void init_constant_memory(void) {
     constmem_values.pxn_enabled = !envvar::disable_pxn;
     constmem_values.world_proxy_sync_available = static_cast<GDABackend*>(backend)->world_proxy_sync_available();
     constmem_values.world_proxy_aligned_data_available = static_cast<GDABackend*>(backend)->world_proxy_aligned_data_available();
+    const auto& sync_proxies = static_cast<GDABackend*>(backend)->world_proxy_sync_pes();
+    for (size_t i = 0; i < sync_proxies.size(); i++) {
+      constmem_values.world_proxy_sync_pes[i] = sync_proxies[i];
+    }
     const auto& ipc_domain_first_pes = static_cast<GDABackend*>(backend)->world_proxy_ipc_domain_first_pes();
     constmem_values.world_proxy_ipc_domain_count = static_cast<int>(ipc_domain_first_pes.size());
     for (size_t i = 0; i < ipc_domain_first_pes.size(); i++) {
       constmem_values.world_proxy_ipc_domain_first_pes[i] = ipc_domain_first_pes[i];
     }
     auto* gda_backend = static_cast<GDABackend*>(backend);
+    constmem_values.proxy_network_planes_enabled = gda_backend->proxy_network_planes().configured;
+    const auto& plane_ids = gda_backend->proxy_nic_plane_ids();
+    for (size_t i = 0; i < plane_ids.size(); i++) {
+      constmem_values.proxy_nic_plane_ids[i] = plane_ids[i];
+    }
     constmem_values.world_proxy_nic_layout_available = gda_backend->world_proxy_nic_layout_available();
     constmem_values.world_proxy_nic_name_count = gda_backend->world_proxy_nic_name_count();
     const auto& pe_nic_name_ids = gda_backend->world_proxy_pe_nic_name_ids();

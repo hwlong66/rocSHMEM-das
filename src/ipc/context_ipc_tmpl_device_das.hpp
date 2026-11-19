@@ -265,7 +265,12 @@ __device__ int IPCContext::reduce_scatter_wg_das(rocshmem_team_t team, T *dest,
   const int block_size = get_flat_block_size();
   const int scratch_elems = static_cast<int>(ROCSHMEM_REDUCE_MIN_WRKDATA_SIZE * sizeof(double) / sizeof(T));
   const int scratch_slots = max(1, pe_size - 1);
-  const int chunk_size = max(1, scratch_elems / scratch_slots);
+  // Keep scratch slot strides and chunk offsets aligned for 16-byte copies.
+  const int chunk_alignment = max(1, static_cast<int>(16 / sizeof(T)));
+  const int slot_elems = max(1, scratch_elems / scratch_slots);
+  const int chunk_size = slot_elems >= chunk_alignment
+		         ? (slot_elems / chunk_alignment) * chunk_alignment
+                         : slot_elems;
   const int wave_id = thread_id / WF_SIZE;
   const int num_waves = (block_size + WF_SIZE - 1) / WF_SIZE;
 

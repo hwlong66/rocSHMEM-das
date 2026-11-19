@@ -30,6 +30,7 @@
 #include <cstdint>
 
 #include "gda/gda_enums.hpp"
+#include "constants.hpp"
 #include "rocshmem/rocshmem_common.hpp"
 #include "util.hpp"
 
@@ -48,20 +49,24 @@ struct constmem_t {
    * An IPC domain contains node-local PEs with direct IPC connectivity.
    * A physical node may contain multiple IPC domains.
    */
-  bool pxn_enabled;  // Enforce same-name NIC proxy routes when DISABLE_PXN=0.
+  bool pxn_enabled;  // Enforce configured NIC compatibility when DISABLE_PXN=0.
+  bool proxy_network_planes_enabled;
+  // [NIC-name ID] -> canonical plane ID; -1 excludes an unlisted NIC.
+  int proxy_nic_plane_ids[ROCSHMEM_PROXY_MAX_NIC_NAMES];
   bool world_proxy_sync_available;  // Host-validated WORLD proxy sync layout is available.
   // Corresponding PE slots in equal-sized IPC domains own matching NICs.
   bool world_proxy_aligned_data_available;
   int world_proxy_ipc_domain_count;  // Number of IPC domains in the WORLD proxy layout.
   // [IPC domain index] -> first world PE; this is not a physical node ID.
-  int world_proxy_ipc_domain_first_pes[ROCSHMEM_BARRIER_SYNC_SIZE];
+  int world_proxy_sync_pes[ROCSHMEM_PROXY_MAX_IPC_DOMAINS];  // Selected sync proxies, in domain order.
+  int world_proxy_ipc_domain_first_pes[ROCSHMEM_PROXY_MAX_IPC_DOMAINS];
   bool world_proxy_nic_layout_available;  // WORLD PE-to-NIC-name mapping is available.
   int world_proxy_nic_name_count;  // Number of distinct NIC names in that mapping.
   /*
    * [world PE] -> NIC-name ID, shared across nodes and assigned by sorted name.
    * This ID is not a node-local IB device index. Valid only when the mapping is enabled.
    */
-  int world_proxy_pe_nic_name_ids[ROCSHMEM_BARRIER_SYNC_SIZE];
+  int world_proxy_pe_nic_name_ids[ROCSHMEM_PROXY_MAX_PES];
   uintptr_t heap_base;  // Local symmetric heap base
   size_t heap_size;     // Local symmetric heap size in bytes
 } __attribute__ ((aligned (16)));

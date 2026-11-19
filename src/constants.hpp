@@ -65,6 +65,14 @@ inline const int WF_SIZE{64};
 inline const int WF_SIZE{32};
 #endif
 
+// Storage limits for proxy metadata; synchronization has separate pSync limits.
+constexpr int ROCSHMEM_PROXY_MAX_PES = 256;
+constexpr int ROCSHMEM_PROXY_MAX_IPC_DOMAINS = 256;
+constexpr int ROCSHMEM_PROXY_MAX_NIC_NAMES = 256;
+constexpr int ROCSHMEM_PROXY_PLAN_CAPACITY = 256;  // Total endpoint entries in a WG plan.
+constexpr int ROCSHMEM_PROXY_DOMAIN_CACHE_CAPACITY = 256;  // Domain-by-NIC count entries.
+constexpr int ROCSHMEM_PROXY_NIC_MASK_BITS = 64;  // Bit width of the uint64_t NIC-pair cache.
+
 }  // namespace rocshmem
 
 #endif  // LIBRARY_SRC_CONSTANTS_HPP_

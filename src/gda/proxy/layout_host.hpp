@@ -1,8 +1,8 @@
 // Copyright (c) 2026 Hygon Information Technology Co., Ltd.
 // SPDX-License-Identifier: MIT
 
-#ifndef LIBRARY_SRC_GDA_PROXY_LAYOUT_HPP_
-#define LIBRARY_SRC_GDA_PROXY_LAYOUT_HPP_
+#ifndef LIBRARY_SRC_GDA_PROXY_LAYOUT_HOST_HPP_
+#define LIBRARY_SRC_GDA_PROXY_LAYOUT_HOST_HPP_
 
 #include <limits>
 #include <map>
@@ -11,7 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include "gda/proxy/route_plan_host.hpp"
+#include "gda/proxy/candidate_host.hpp"
+#include "constants.hpp"
+#include "gda/proxy/network_plane.hpp"
 
 namespace rocshmem::proxy {
 
@@ -20,47 +22,49 @@ namespace rocshmem::proxy {
  * Domain identifiers are world-PE based and do not represent physical host IDs.
  */
 
+struct DomainProxyLayout {
+  std::string nic_name;
+  std::map<int, int> proxy_pe_by_ipc_domain_first_pe;
+  std::map<int, std::string> nic_by_ipc_domain_first_pe;
+
+  explicit operator bool() const { return !nic_name.empty() && !proxy_pe_by_ipc_domain_first_pe.empty(); }
+};
+
 struct WorldProxySyncLayout {
   std::vector<int> ipc_domain_first_pes;
+  std::vector<int> proxy_pes;
 
   explicit operator bool() const { return ipc_domain_first_pes.size() > 1; }
 };
 
 /**
- * @brief Validate the first-PE proxy layout used by WORLD synchronization.
+ * @brief Validate the selected per-domain proxies used by WORLD synchronization.
  *
  * @param candidates Globally exchanged NIC candidates.
- * @param routes Selected directional routes between IPC domains.
+ * @param sync_layout Selected stable endpoint and NIC for each participating domain.
  * @param num_pes Number of world PEs.
  * @param max_sync_slots Available world-rank synchronization slots.
  * @return Ordered IPC domain first PEs, or an invalid layout.
  */
 inline WorldProxySyncLayout BuildWorldProxySyncLayout(const std::vector<ProxyNicCandidate> &candidates,
-                                                      const std::map<std::pair<int, int>, ProxyRoute> &routes,
-                                                      int num_pes, int max_sync_slots) {
+                                                      const DomainProxyLayout &sync_layout,
+                                                      int num_pes, int max_sync_slots, const NetworkPlanePolicy &policy = {}) {
   WorldProxySyncLayout layout;
-  if (num_pes < 2 || num_pes > max_sync_slots) {
+  if (num_pes < 2 || num_pes > max_sync_slots || num_pes > ROCSHMEM_PROXY_MAX_PES) {
     return {};
   }
 
   // Key is the first world PE in an IPC domain, not a hardware node ID.
   std::map<int, std::set<int>> ipc_domain_members;
-  std::map<int, std::string> first_pe_nics;
   for (const auto &candidate : candidates) {
     if (candidate.ipc_domain_first_pe < 0 || candidate.proxy_pe < 0 || candidate.proxy_pe >= num_pes ||
         candidate.ipc_domain_first_pe > candidate.proxy_pe) {
       return {};
     }
     ipc_domain_members[candidate.ipc_domain_first_pe].insert(candidate.proxy_pe);
-    if (candidate.proxy_pe == candidate.ipc_domain_first_pe && candidate.nic_priority == 0) {
-      first_pe_nics[candidate.proxy_pe] = candidate.nic_name;
-    }
   }
 
-  if (first_pe_nics[0].empty()) {
-    return {};
-  }
-
+  std::string reference_nic;
   int next_pe = 0;
 
   for (const auto &ipc_domain : ipc_domain_members) {
@@ -78,24 +82,27 @@ inline WorldProxySyncLayout BuildWorldProxySyncLayout(const std::vector<ProxyNic
 
     layout.ipc_domain_first_pes.push_back(ipc_domain_first_pe);
     next_pe += local_pe_count;
-    if (ipc_domain_first_pe == 0) {
-      continue;
-    }
-
-    auto forward = routes.find({0, ipc_domain_first_pe});
-    auto reverse = routes.find({ipc_domain_first_pe, 0});
-    // The QPs connecting IPC domains must belong to the proxy PEs that run the
-    // device protocol, in both directions, on the same named NIC.
-    if (forward == routes.end() || reverse == routes.end() || forward->second.source_proxy_pe != 0 ||
-        forward->second.target_proxy_pe != ipc_domain_first_pe ||
-        reverse->second.source_proxy_pe != ipc_domain_first_pe || reverse->second.target_proxy_pe != 0 ||
-        forward->second.nic_name != reverse->second.nic_name ||
-        first_pe_nics[ipc_domain_first_pe] != first_pe_nics[0] || forward->second.nic_name != first_pe_nics[0]) {
+    const auto proxy = sync_layout.proxy_pe_by_ipc_domain_first_pe.find(ipc_domain_first_pe);
+    const auto nic = sync_layout.nic_by_ipc_domain_first_pe.find(ipc_domain_first_pe);
+    if (proxy == sync_layout.proxy_pe_by_ipc_domain_first_pe.end() ||
+        nic == sync_layout.nic_by_ipc_domain_first_pe.end() || !ipc_domain.second.count(proxy->second)) {
       return {};
     }
+    bool advertised = false;
+    for (const auto &candidate : candidates) {
+      advertised |= candidate.ipc_domain_first_pe == ipc_domain_first_pe &&
+                    candidate.proxy_pe == proxy->second && candidate.nic_name == nic->second &&
+                    candidate.nic_priority == 0;
+    }
+    if (reference_nic.empty()) reference_nic = nic->second;
+    if (!advertised || !policy.allows(reference_nic, nic->second)) return {};
+    layout.proxy_pes.push_back(proxy->second);
   }
 
-  if (next_pe != num_pes || layout.ipc_domain_first_pes.size() < 2) {
+  if (next_pe != num_pes || layout.ipc_domain_first_pes.size() < 2 ||
+      layout.ipc_domain_first_pes.size() > ROCSHMEM_PROXY_MAX_IPC_DOMAINS ||
+      sync_layout.proxy_pe_by_ipc_domain_first_pe.size() != ipc_domain_members.size() ||
+      sync_layout.nic_by_ipc_domain_first_pe.size() != ipc_domain_members.size()) {
     return {};
   }
 
@@ -108,10 +115,10 @@ inline WorldProxySyncLayout BuildWorldProxySyncLayout(const std::vector<ProxyNic
  * @param candidates Globally exchanged NIC candidates.
  * @param num_pes Number of world PEs.
  * @param local_pe_count Number of PEs in each required equal-size IPC domain.
- * @return true when every corresponding slot owns the same named NIC.
+ * @return true when corresponding slots own compatible NICs.
  */
 inline bool CanUseAlignedWorldProxyData(const std::vector<ProxyNicCandidate> &candidates, int num_pes,
-                                        int local_pe_count) {
+                                        int local_pe_count, const NetworkPlanePolicy &policy = {}) {
   if (local_pe_count <= 1 || num_pes <= local_pe_count || num_pes % local_pe_count != 0) {
     return false;
   }
@@ -146,7 +153,7 @@ inline bool CanUseAlignedWorldProxyData(const std::vector<ProxyNicCandidate> &ca
   for (int pe = local_pe_count; pe < num_pes; pe++) {
     const auto &local_nic = selected_nics[pe];
     const auto &first_ipc_domain_nic = selected_nics[pe % local_pe_count];
-    if (local_nic.empty() || local_nic != first_ipc_domain_nic) {
+    if (local_nic.empty() || !policy.allows(local_nic, first_ipc_domain_nic)) {
       return false;
     }
   }
@@ -174,7 +181,7 @@ struct WorldNicLayout {
  */
 inline WorldNicLayout BuildWorldNicLayout(const std::vector<ProxyNicCandidate> &candidates,
                                           int world_pe_count, int device_layout_capacity) {
-  if (world_pe_count < 2 || world_pe_count > device_layout_capacity) {
+  if (world_pe_count < 1 || world_pe_count > device_layout_capacity) {
     return {};
   }
 
@@ -191,6 +198,10 @@ inline WorldNicLayout BuildWorldNicLayout(const std::vector<ProxyNicCandidate> &
     nic_name_by_pe[candidate.proxy_pe] = candidate.nic_name;
     candidate_count_by_pe[candidate.proxy_pe]++;
     unique_nic_names.insert(candidate.nic_name);
+  }
+
+  if (unique_nic_names.size() > ROCSHMEM_PROXY_MAX_NIC_NAMES) {
+    return {};
   }
 
   // The PE count is already capacity-checked, and there is one NIC per PE.
@@ -215,14 +226,13 @@ inline WorldNicLayout BuildWorldNicLayout(const std::vector<ProxyNicCandidate> &
   return layout;
 }
 
-// A partial team can use PXN without external progress when every
-// participating IPC domain has a team member that owns the same NIC.
-struct InTeamProxyLayout {
-  std::string nic_name;
-  std::map<int, int> proxy_pe_by_ipc_domain_first_pe;
-
-  explicit operator bool() const { return !nic_name.empty() && !proxy_pe_by_ipc_domain_first_pe.empty(); }
+// Each domain uses one stable endpoint in a compatibility group shared by
+// all participating domains. Protocol constraints only change eligibility.
+enum class ProxyEndpointConstraint {
+  TeamMembers,  // Any team member in the domain may act as proxy.  // Any team member in the domain may act as the sync proxy.
+  DomainFirst,  // Only the domain-first PE using its preferred NIC may proxy.  // Only the domain's first PE, using its preferred NIC, may proxy.
 };
+
 
 /**
  * @brief Test whether a world PE belongs to a strided team.
@@ -243,16 +253,18 @@ inline bool TeamContainsPe(int pe_start, int stride, int team_size, int world_pe
 }
 
 /**
- * @brief Select one common in-team NIC proxy in each participating IPC domain.
+ * @brief Build fixed in-team proxies for synchronization and data-route fallback.
  *
  * @param candidates Globally exchanged NIC candidates.
  * @param pe_start First world PE in the team.
  * @param stride World-rank stride between team members.
  * @param team_size Number of team members.
- * @return The lowest-priority-sum common-NIC layout, or an invalid layout.
+ * @return The lowest-priority-sum compatible layout, or an invalid layout.
  */
-inline InTeamProxyLayout BuildInTeamProxyLayout(const std::vector<ProxyNicCandidate> &candidates,
-                                                int pe_start, int stride, int team_size) {
+inline DomainProxyLayout BuildFixedDomainProxyLayout(const std::vector<ProxyNicCandidate> &candidates,
+                                                int pe_start, int stride, int team_size,
+                                                const NetworkPlanePolicy &policy = {},
+                                                ProxyEndpointConstraint endpoints = ProxyEndpointConstraint::TeamMembers) {
   if (pe_start < 0 || stride <= 0 || team_size <= 0) {
     return {};
   }
@@ -265,8 +277,15 @@ inline InTeamProxyLayout BuildInTeamProxyLayout(const std::vector<ProxyNicCandid
     }
 
     participating_ipc_domains.insert(candidate.ipc_domain_first_pe);
+    if (endpoints == ProxyEndpointConstraint::DomainFirst &&
+        (candidate.proxy_pe != candidate.ipc_domain_first_pe || candidate.nic_priority != 0)) {
+      continue;
+    }
     if (!candidate.nic_name.empty() && candidate.nic_priority >= 0) {
-      nic_names.insert(candidate.nic_name);
+      const auto group = policy.group(candidate.nic_name);
+      if (!group.empty()) {
+        nic_names.insert(group);
+      }
     }
   }
 
@@ -274,16 +293,21 @@ inline InTeamProxyLayout BuildInTeamProxyLayout(const std::vector<ProxyNicCandid
     return {};
   }
 
-  InTeamProxyLayout best;
+  DomainProxyLayout best;
   int best_priority = std::numeric_limits<int>::max();
 
   for (const auto &nic_name : nic_names) {
     std::map<int, int> proxies;
+    std::map<int, std::string> selected_nics;
     int total_priority = 0;
     for (int ipc_domain_first_pe : participating_ipc_domains) {
       const ProxyNicCandidate *selected = nullptr;
       for (const auto &candidate : candidates) {
-        if (candidate.ipc_domain_first_pe != ipc_domain_first_pe || candidate.nic_name != nic_name ||
+        if (endpoints == ProxyEndpointConstraint::DomainFirst &&
+            (candidate.proxy_pe != ipc_domain_first_pe || candidate.nic_priority != 0)) {
+          continue;
+        }
+        if (candidate.ipc_domain_first_pe != ipc_domain_first_pe || policy.group(candidate.nic_name) != nic_name ||
             candidate.nic_priority < 0 || !TeamContainsPe(pe_start, stride, team_size, candidate.proxy_pe)) {
           continue;
         }
@@ -299,6 +323,7 @@ inline InTeamProxyLayout BuildInTeamProxyLayout(const std::vector<ProxyNicCandid
         break;
       }
       proxies[ipc_domain_first_pe] = selected->proxy_pe;
+      selected_nics[ipc_domain_first_pe] = selected->nic_name;
       total_priority += selected->nic_priority;
     }
 
@@ -307,7 +332,8 @@ inline InTeamProxyLayout BuildInTeamProxyLayout(const std::vector<ProxyNicCandid
     }
 
     if (!best || total_priority < best_priority) {
-      best.nic_name = nic_name;
+      best.nic_name = selected_nics.begin()->second;
+      best.nic_by_ipc_domain_first_pe = std::move(selected_nics);
       best.proxy_pe_by_ipc_domain_first_pe = std::move(proxies);
       best_priority = total_priority;
     }
@@ -316,6 +342,26 @@ inline InTeamProxyLayout BuildInTeamProxyLayout(const std::vector<ProxyNicCandid
   return best;
 }
 
+/**
+ * @brief Host-owned PXN discovery result shared by backend setup stages.
+ *
+ * All layouts derive from the same globally exchanged candidate set.
+ */
+struct ProxyRoutingState {
+  std::vector<ProxyNicCandidate> candidates;  // Selected-NIC candidates gathered from all PEs.
+  NetworkPlanePolicy network_planes;  // Configured NIC compatibility policy; unset means same-name.
+  std::vector<int> nic_plane_ids;  // NIC-name ID -> plane ID; -1 means not listed.
+
+  bool world_sync_available = false;  // Host-validated WORLD synchronization layout is usable.
+  bool world_aligned_data_available = false;  // Equal-sized contiguous domains have compatible matching slots.
+  std::vector<int> world_sync_proxy_pes;  // Selected synchronization PE per IPC domain.
+  std::vector<int> world_ipc_domain_first_pes;  // Sorted first world PE of each IPC domain.
+  std::vector<int> world_pe_nic_name_ids;  // World PE -> global NIC-name ID, not a local device index.
+  int world_nic_name_count = 0;  // Number of distinct NIC names in the WORLD mapping.
+
+  bool has_world_nic_layout() const { return !world_pe_nic_name_ids.empty(); }
+};
+
 }  // namespace rocshmem::proxy
 
-#endif  // LIBRARY_SRC_GDA_PROXY_LAYOUT_HPP_
+#endif  // LIBRARY_SRC_GDA_PROXY_LAYOUT_HOST_HPP_

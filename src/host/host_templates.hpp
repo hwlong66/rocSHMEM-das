@@ -498,14 +498,11 @@ __host__ int HostInterface::reduce_on_stream(rocshmem_team_t team,
           team, byte_count, stream,
           [dest, source, nreduce](rocshmem_team_t *dev_wg_teams,
                                    hipStream_t launch_stream, size_t num_wgs) {
-            size_t chunk_bytes = CollectiveLauncher::kChunkSize;
-            size_t elems_per_chunk = chunk_bytes / sizeof(T);
-            if (elems_per_chunk == 0) elems_per_chunk = 1;
             const int kThreads = std::max(1, envvar::num_threads_on_stream.get_value());
             int blocks = static_cast<int>(num_wgs);
             rocshmem_reduce_on_stream_multi_wg_kernel<T, Op>
                 <<<blocks, kThreads, 0, launch_stream>>>(
-                    dev_wg_teams, dest, source, nreduce, elems_per_chunk);
+                    dev_wg_teams, dest, source, nreduce);
           })) {
     return hipGetLastError();
   }

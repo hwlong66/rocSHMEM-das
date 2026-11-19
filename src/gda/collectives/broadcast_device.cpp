@@ -24,17 +24,15 @@ __device__ __noinline__ bool GDAContext::internal_broadcastmem_wave_pxn(GDATeam 
     return false;
   }
 
-  const bool world = info->pe_start == 0 && info->stride == 1 && team_obj->num_pes == constmem.num_pes;
-  const int ipc_domain_count = world ? constmem.world_proxy_ipc_domain_count : team_obj->in_team_proxy_ipc_domain_count;
+  const auto view = proxy::GetProxyTeamView(team_obj, info->pe_start, info->stride, team_obj->num_pes);
+  const bool world = view.is_world;
+  const int ipc_domain_count = view.ipc_domain_count;
   int root_first = -1;
   int local_domain = -1;
 
   for (int domain = 0; domain < ipc_domain_count; domain++) {
-    const int first = world ? constmem.world_proxy_ipc_domain_first_pes[domain]
-                            : team_obj->in_team_proxy_ipc_domain_first_pes[domain];
-    const int end = world                           ? proxy::WorldProxyIpcDomainEnd(first)
-                    : domain + 1 < ipc_domain_count ? team_obj->in_team_proxy_ipc_domain_first_pes[domain + 1]
-                                                    : constmem.num_pes;
+    const int first = view.domain_first(domain);
+    const int end = view.domain_end(domain);
     if (first == constmem.ipc_first_pe) {
       local_domain = domain;
     }
@@ -53,49 +51,66 @@ __device__ __noinline__ bool GDAContext::internal_broadcastmem_wave_pxn(GDATeam 
     internal_proxy_sync_wave(team_obj, p_sync, wf_info, epoch++);
   }
 
+  // Each lane stores a few domain routes in registers. Shuffles share them
+  // only within this wave, without a cross-wave shared-memory cache.
+  constexpr int route_slots = (ROCSHMEM_PROXY_MAX_IPC_DOMAINS + WF_SIZE - 1) / WF_SIZE;
+  int source_routes[route_slots];
+  int target_routes[route_slots];
+  for (int slot = 0; slot < route_slots; slot++) {
+    source_routes[slot] = -1;
+    target_routes[slot] = -1;
+  }
+  const int lane = get_flat_block_id() % WF_SIZE;
+
   for (size_t offset = 0; offset < bytes; offset += tile_bytes) {
     const size_t count = min(tile_bytes, bytes - offset);
     char *target = static_cast<char *>(dst) + offset;
     const char *source = static_cast<const char *>(src) + offset;
     // Four existing phases per tile; every member derives the same route.
     const uint64_t operation = team_obj->proxy_data_route_sequence + team_obj->pool_index_;
+    for (int domain = 0; domain < ipc_domain_count; domain++) {
+      const int first = view.domain_first(domain);
+      if (first != root_first && lane == domain % WF_SIZE) {
+        const auto route = proxy::SelectTeamProxyDataRoute(team_obj, root_first, first, operation + domain);
+        assert(route.source_pe >= 0 && route.target_pe >= 0);
+        source_routes[domain / WF_SIZE] = route.source_pe;
+        target_routes[domain / WF_SIZE] = route.target_pe;
+      }
+    }
+    __builtin_amdgcn_wave_barrier();
 
     if (constmem.my_pe == root) {
       memcpy_wave<MemcpyKind::Get>(target, const_cast<char *>(source), count);
     }
     internal_proxy_sync_wave(team_obj, p_sync, wf_info, epoch++);
     for (int domain = 0; domain < ipc_domain_count; domain++) {
-      const int first = world ? constmem.world_proxy_ipc_domain_first_pes[domain]
-                              : team_obj->in_team_proxy_ipc_domain_first_pes[domain];
+      const int first = view.domain_first(domain);
       if (first == root_first) {
         continue;
       }
-      const auto route = proxy::SelectTeamProxyDataRoute(team_obj, root_first, first, operation + domain);
-      assert(route.source_pe >= 0 && route.target_pe >= 0);
-      if (constmem.my_pe == route.source_pe && route.source_pe != root) {
+      const int source_proxy = __shfl(source_routes[domain / WF_SIZE], domain % WF_SIZE, WF_SIZE);
+      if (constmem.my_pe == source_proxy && source_proxy != root) {
         internal_getmem_wave(target, target, count, root, root, wf_info);
         memcpy_wave<MemcpyKind::Put>(target, target, count);
       }
     }
     internal_proxy_sync_wave(team_obj, p_sync, wf_info, epoch++);
     for (int domain = 0; domain < ipc_domain_count; domain++) {
-      const int first = world ? constmem.world_proxy_ipc_domain_first_pes[domain]
-                              : team_obj->in_team_proxy_ipc_domain_first_pes[domain];
+      const int first = view.domain_first(domain);
       if (first == root_first) {
         continue;
       }
-      const auto route = proxy::SelectTeamProxyDataRoute(team_obj, root_first, first, operation + domain);
-      if (constmem.my_pe == route.source_pe && is_thread_zero_in_wave()) {
-        internal_putmem(target, target, count, route.target_pe, qp_row * constmem.num_pes + route.target_pe, wf_info);
+      const int source_proxy = __shfl(source_routes[domain / WF_SIZE], domain % WF_SIZE, WF_SIZE);
+      const int target_proxy = __shfl(target_routes[domain / WF_SIZE], domain % WF_SIZE, WF_SIZE);
+      if (constmem.my_pe == source_proxy && is_thread_zero_in_wave()) {
+        internal_putmem(target, target, count, target_proxy, qp_row * constmem.num_pes + target_proxy, wf_info);
       }
     }
     internal_proxy_sync_wave(team_obj, p_sync, wf_info, epoch++);
 
-    const int local_first = world ? constmem.world_proxy_ipc_domain_first_pes[local_domain]
-                                  : team_obj->in_team_proxy_ipc_domain_first_pes[local_domain];
-    const int local_proxy = local_first == root_first
-            ? root
-            : proxy::SelectTeamProxyDataRoute(team_obj, root_first, local_first, operation + local_domain).target_pe;
+    const int local_first = view.domain_first(local_domain);
+    const int local_proxy = local_first == root_first ? root :
+        __shfl(target_routes[local_domain / WF_SIZE], local_domain % WF_SIZE, WF_SIZE);
     if (constmem.my_pe != local_proxy) {
       internal_getmem_wave(target, target, count, local_proxy, local_proxy, wf_info);
     }
@@ -220,10 +235,10 @@ __device__ __noinline__ bool GDAContext::internal_broadcastmem_wg_pxn(GDATeam *t
                            : proxy_epoch_base;
   // A single protocol uses one lane for small messages and independent NIC
   // lanes for large messages. Build the table once, then reuse it in all phases.
-  __shared__ int source_proxies[ROCSHMEM_BARRIER_SYNC_SIZE];
-  __shared__ int target_proxies[ROCSHMEM_BARRIER_SYNC_SIZE];
-  __shared__ int lane_counts[ROCSHMEM_BARRIER_SYNC_SIZE];
-  __shared__ size_t segment_bytes[ROCSHMEM_BARRIER_SYNC_SIZE];
+  __shared__ int source_proxies[ROCSHMEM_PROXY_MAX_PES];
+  __shared__ int target_proxies[ROCSHMEM_PROXY_MAX_PES];
+  __shared__ int lane_counts[ROCSHMEM_PROXY_MAX_IPC_DOMAINS];
+  __shared__ size_t segment_bytes[ROCSHMEM_PROXY_MAX_IPC_DOMAINS];
   constexpr size_t min_lane_bytes = 64 * 1024;
 
   if (is_thread_zero_in_block()) {
@@ -232,51 +247,33 @@ __device__ __noinline__ bool GDAContext::internal_broadcastmem_wg_pxn(GDATeam *t
       if (first == root_first) {
         continue;
       }
-      int groups = 0;
-      int endpoint_lanes = 0;
+      int lanes = 0;
       if (constmem.world_proxy_nic_layout_available) {
-        for (int nic = 0; nic < constmem.world_proxy_nic_name_count; nic++) {
-          const int sources = proxy::CountProxyDataEndpoints(team_obj,
-                                     root_first, proxy::WorldProxyIpcDomainEnd(root_first), nic, -1);
-          const int targets = proxy::CountProxyDataEndpoints(team_obj,
-                                     first, proxy::WorldProxyIpcDomainEnd(first), nic, -1);
-          groups += sources > 0 && targets > 0;
-          endpoint_lanes += min(sources, targets);
+        const int useful = max(1, static_cast<int>((bytes + min_lane_bytes - 1) / min_lane_bytes));
+        const int source_end = proxy::WorldProxyIpcDomainEnd(root_first);
+        const int target_end = proxy::WorldProxyIpcDomainEnd(first);
+        const int capacity = min(useful, min(source_end - root_first, target_end - first));
+        lanes = proxy::BuildProxyDataRouteLanes(
+            {team_obj, root_first, source_end, first, target_end, constmem.pxn_enabled},
+            operation + domain, capacity, source_proxies + first, target_proxies + first);
+        if (lanes == 0) {
+          LOGD_ERROR_ABORT("PXN broadcast has no usable compatible-NIC data route");
         }
+      } else {
+        // Without PE/NIC mapping, use only the host-validated fixed route.
+        const int source_proxy = proxy::GetValidatedDomainProxy(team_obj, root_first);
+        const int target_proxy = proxy::GetValidatedDomainProxy(team_obj, first);
+        if (source_proxy < 0 || target_proxy < 0) {
+          LOGD_ERROR_ABORT("PXN broadcast has no validated fixed data route");
+        }
+
+        source_proxies[first] = source_proxy;
+        target_proxies[first] = target_proxy;
+        lanes = 1;
       }
-      // Missing PE/NIC mapping retains the host-validated fixed route.
-      const int useful = max(1, static_cast<int>((bytes + min_lane_bytes - 1) / min_lane_bytes));
-      const int lanes = groups > 0 ? min(endpoint_lanes, useful) : 1;
+
       lane_counts[domain] = lanes;
       segment_bytes[domain] = ((bytes + lanes - 1) / lanes + 15) & ~size_t{15};
-      int lane = 0;
-      for (int round = 0; lane < lanes; round++) {
-        for (int turn = 0; groups > 0 && turn < constmem.world_proxy_nic_name_count && lane < lanes; turn++) {
-          const int nic = (operation + domain + turn) % constmem.world_proxy_nic_name_count;
-          const int sources = proxy::CountProxyDataEndpoints(team_obj,
-                                     root_first, proxy::WorldProxyIpcDomainEnd(root_first), nic, -1);
-          const int targets = proxy::CountProxyDataEndpoints(team_obj,
-                                     first, proxy::WorldProxyIpcDomainEnd(first), nic, -1);
-          if (round >= min(sources, targets)) {
-            continue;
-          }
-          const uint64_t ordinal = operation / constmem.world_proxy_nic_name_count + round;
-          source_proxies[first + lane] = proxy::SelectProxyDataEndpoint(team_obj,
-                                     root_first, proxy::WorldProxyIpcDomainEnd(root_first), nic, -1, ordinal % sources);
-          target_proxies[first + lane] = proxy::SelectProxyDataEndpoint(team_obj,
-                                     first, proxy::WorldProxyIpcDomainEnd(first), nic, -1, ordinal % targets);
-          lane++;
-        }
-        if (groups == 0) {
-          const auto route = proxy::SelectTeamProxyDataRoute(team_obj, root_first, first, operation);
-          if (route.source_pe < 0 || route.target_pe < 0) {
-            LOGD_ERROR_ABORT("PXN broadcast has no usable same-NIC data route");
-          }
-          source_proxies[first] = route.source_pe;
-          target_proxies[first] = route.target_pe;
-          lane = lanes;
-        }
-      }
     }
   }
   __syncthreads();

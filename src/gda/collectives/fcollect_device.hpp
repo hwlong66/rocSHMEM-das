@@ -21,18 +21,19 @@ __device__ void GDAContext::internal_fcollect_wg_ipc_domain_pxn(GDATeam *team_ob
   const int *domain_proxies = internal_build_collective_proxy_plan_wg(team_obj, operation);
   constexpr size_t scratch_elements = ROCSHMEM_REDUCE_MIN_WRKDATA_SIZE * sizeof(double) / sizeof(T);
   T *packed = reinterpret_cast<T *>(team_obj->pWrk);
-  int max_members = 0;
-
-  for (int domain = 0; domain < view.ipc_domain_count; domain++) {
-    const int first = view.domain_first(domain);
-    const int end = proxy::WorldProxyIpcDomainEnd(first);
-    int members = 0;
-    for (int rank = 0; rank < team_obj->num_pes; rank++) {
-      const int peer = team_obj->get_pe_in_world(rank);
-      members += peer >= first && peer < end;
-    }
-    max_members = max(max_members, members);
+  __shared__ proxy::ProxyDomainMembers domain_members[ROCSHMEM_PROXY_MAX_IPC_DOMAINS];
+  __shared__ int max_members;
+  if (view.ipc_domain_count <= 0 || view.ipc_domain_count > ROCSHMEM_PROXY_MAX_IPC_DOMAINS) {
+    LOGD_ERROR_ABORT("PXN fcollect has invalid domain count");
   }
+  if (is_thread_zero_in_block()) {
+    max_members = 0;
+    for (int domain = 0; domain < view.ipc_domain_count; domain++) {
+      domain_members[domain] = proxy::GetProxyDomainMembers(view, domain);
+      max_members = max(max_members, domain_members[domain].count);
+    }
+  }
+  __syncthreads();
 
   if (max_members <= 0) {
     LOGD_ERROR_ABORT("PXN fcollect has no IPC members");
@@ -48,6 +49,7 @@ __device__ void GDAContext::internal_fcollect_wg_ipc_domain_pxn(GDATeam *team_ob
   long *p_sync = team_obj->alltoall_pSync;
   int64_t epoch = static_cast<int64_t>(team_obj->proxy_fcollect_sync_epoch);
   ActiveWFInfo wf_info(ctx_id_, ThreadScope::wg);
+  const int broadcast_phases = proxy::TeamBroadcastPhaseCount(team_obj);
 
   for (int offset = elem_offset; offset < elem_offset + elem_count; offset += tile_capacity) {
     const int count = min(tile_capacity, elem_offset + elem_count - offset);
@@ -61,15 +63,11 @@ __device__ void GDAContext::internal_fcollect_wg_ipc_domain_pxn(GDATeam *team_ob
         if (constmem.my_pe != domain_proxies[domain]) {
           continue;
         }
-        int slot = 0;
-        const int first = view.domain_first(domain);
-        for (int rank = 0; rank < team_obj->num_pes; rank++) {
-          const int peer = team_obj->get_pe_in_world(rank);
-          if (peer >= first && peer < proxy::WorldProxyIpcDomainEnd(first)) {
-            internal_proxy_getmem_wg(packed + slot * count, src + offset, static_cast<size_t>(count) * sizeof(T),
-                                     peer, 0, wf_info);
-            slot++;
-          }
+        const auto members = domain_members[domain];
+        for (int slot = 0; slot < members.count; slot++) {
+          const int peer = team_obj->get_pe_in_world(members.first_rank + slot);
+          internal_proxy_getmem_wg(packed + slot * count, src + offset, static_cast<size_t>(count) * sizeof(T),
+                                   peer, 0, wf_info);
         }
       }
     }
@@ -77,25 +75,15 @@ __device__ void GDAContext::internal_fcollect_wg_ipc_domain_pxn(GDATeam *team_ob
     internal_proxy_sync_wg(team_obj, p_sync, wf_info, epoch++);
 
     for (int domain = 0; domain < view.ipc_domain_count; domain++) {
-      const int first = view.domain_first(domain);
-      int first_rank = -1;
-      int members = 0;
-      for (int rank = 0; rank < team_obj->num_pes; rank++) {
-        const int peer = team_obj->get_pe_in_world(rank);
-        if (peer >= first && peer < proxy::WorldProxyIpcDomainEnd(first)) {
-          if (first_rank < 0) {
-            first_rank = rank;
-          }
-          members++;
-        }
-      }
+      const int first_rank = domain_members[domain].first_rank;
+      const int members = domain_members[domain].count;
       const int batch_members = pack_domain ? max(1, members) : 1;
       for (int member = 0; member < members; member += batch_members) {
         const int rank = first_rank + member;
         const int root = pack_domain ? domain_proxies[domain] : team_obj->get_pe_in_world(rank);
         internal_broadcast_wg(dst + static_cast<size_t>(rank) * nelems + offset, packed, batch_members * count, root,
                               info->pe_start, info->stride, team_obj->num_pes, p_sync, epoch, qp_row, team_obj);
-        epoch += proxy::TeamBroadcastPhaseCount(team_obj);
+        epoch += broadcast_phases;
       }
     }
     // All readers must finish before the next tile overwrites packed inputs.

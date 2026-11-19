@@ -26,6 +26,7 @@
 #define LIBRARY_SRC_GDA_TEAM_HPP_
 
 #include "team.hpp"
+#include "constants.hpp"
 
 namespace rocshmem {
 
@@ -56,8 +57,8 @@ class GDATeam : public Team {
   // Partial-team PXN layout. Entries are ordered by IPC domain first PE.
   // A zero count is valid only for teams contained in one IPC domain when PXN is enabled.
   int in_team_proxy_ipc_domain_count = 0;
-  int in_team_proxy_ipc_domain_first_pes[ROCSHMEM_BARRIER_SYNC_SIZE]{};
-  int in_team_proxy_pes[ROCSHMEM_BARRIER_SYNC_SIZE]{};
+  int in_team_proxy_ipc_domain_first_pes[ROCSHMEM_PROXY_MAX_IPC_DOMAINS]{};
+  int in_team_proxy_pes[ROCSHMEM_PROXY_MAX_IPC_DOMAINS]{};
 
   // One deterministic sequence for completed data-routing tasks. Synchronization
   // epochs have algorithm-dependent strides and must not drive round-robin turns.

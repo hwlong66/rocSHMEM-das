@@ -34,6 +34,9 @@
 namespace rocshmem {
 
 class QueuePair;
+namespace proxy {
+struct WorldAlltoallPlan;
+}
 
 class GDAContext : public Context {
  public:
@@ -434,6 +437,9 @@ class GDAContext : public Context {
   __device__ bool internal_try_sync_pxn(GDATeam *team_obj, int64_t *p_sync, ThreadScope scope);
   __device__ bool internal_try_sync_range_pxn(int pe_start, int stride, int pe_size,
       int64_t *p_sync, ThreadScope scope);
+  __device__ void internal_proxy_arrive_and_wait(int pe, int local_proxy, int64_t *p_sync,
+                                                ActiveWFInfo &wf_info, int64_t epoch, int qp_offset);
+
   __device__ void internal_world_proxy_sync_thread(int pe, int pe_size, int64_t *p_sync,
       ActiveWFInfo &wf_info, int64_t epoch, int proxy_qp_row);
   __device__ void internal_team_proxy_sync_thread(GDATeam *team_obj, int64_t *p_sync,
@@ -460,7 +466,7 @@ class GDAContext : public Context {
   __device__ __noinline__ const int *internal_build_reduction_proxy_plan_wg(
       GDATeam *team_obj, uint64_t operation, int requested_lanes, int &lanes);
 
-  __device__ __noinline__ int *internal_build_alltoall_routes_wg(GDATeam *team_obj,
+  __device__ __noinline__ const proxy::WorldAlltoallPlan *internal_build_alltoall_proxy_plan_wg(GDATeam *team_obj,
       int source_ipc_domain_first_pe);
 
   __device__ __noinline__ bool internal_broadcastmem_wg_pxn(GDATeam *team_obj,
@@ -519,7 +525,7 @@ class GDAContext : public Context {
 
   template <typename T>
   __device__ __noinline__ void internal_alltoall_wg_routed_world_proxy_pxn(GDATeam *team_obj, T *dest, const T *source, int nelems,
-      int elem_offset, int elem_count, ActiveWFInfo &wf_info);
+      int elem_offset, int elem_count, ActiveWFInfo &wf_info, const proxy::WorldAlltoallPlan &plan);
 
   __device__ __noinline__ void internal_world_proxy_sync_wg(int pe, int PE_size,
       int64_t *pSync, ActiveWFInfo &wf_info, int64_t epoch = 1,

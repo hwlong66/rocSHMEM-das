@@ -1660,11 +1660,10 @@ template <typename T>
 __global__ ATTR_NO_INLINE void rocshmem_fcollect_on_stream_multi_wg_kernel(
     rocshmem_team_t *teams, T *dest, const T *source, int nelems);
 
-/** @brief Multi-workgroup reduce kernel using chunked element ranges. */
+/** @brief Multi-workgroup reduce kernel; each WG submits its complete element range. */
 template <typename T, ROCSHMEM_OP Op>
 __global__ ATTR_NO_INLINE void rocshmem_reduce_on_stream_multi_wg_kernel(
-    rocshmem_team_t *teams, T *dest, const T *source, int nreduce,
-    size_t elems_per_chunk);
+    rocshmem_team_t *teams, T *dest, const T *source, int nreduce);
 
 /**
  * @brief kernel for performing a broadcast collective operation.
