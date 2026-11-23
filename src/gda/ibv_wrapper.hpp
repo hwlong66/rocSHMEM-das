@@ -26,7 +26,7 @@
 #define LIBRARY_SRC_GDA_IBV_WRAPPER_HPP_
 
 #include "ibv_core.hpp"
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
 #include "verbs_adapter/verbs_adapter.hpp"
 #endif
 #include "memory/hip_allocator.hpp"
@@ -149,7 +149,7 @@ class IBVWrapper {
      */
     void *ibv_handle = nullptr;
 
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
     const verbs_adapter::Api* adapter_api(ibv_context* context) const;
     mutable const verbs_adapter::Api* adapter_apis_[2]{};
 #endif

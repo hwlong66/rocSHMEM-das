@@ -1941,15 +1941,7 @@ void GDABackend::close_dv_libs() {
 void GDABackend::exchange_qp_dest_info() {
   for (size_t i = 0; i < qps.size(); i++) {
     NicDevice &nic = nic_for_qp(i);
-#if defined(GDA_SHCA)
-    if (gda_provider == GDAProvider::SHCA) {
-      dest_info[i].shca_lid = nic.portinfo.lid;
-    } else {
-      dest_info[i].lid = u17_to_32(nic.portinfo.lid);
-    }
-#else
     dest_info[i].lid = nic.portinfo.lid;
-#endif
     if (gda_provider == GDAProvider::MLX5) {
       dest_info[i].qpn = mlx5_qps[i].qpn;
     } else {
@@ -2310,15 +2302,7 @@ void GDABackend::modify_qps_init_to_rtr() {
     if (nic.portinfo.link_layer == IBV_LINK_LAYER_ETHERNET) {
       memcpy(&attr.ah_attr.grh.dgid, &dest_info[i].gid, 16);
     } else {
-#if defined(GDA_SHCA)
-      if (gda_provider == GDAProvider::SHCA) {
-        attr.ah_attr.dlid = dest_info[i].shca_lid;
-      } else {
-        attr.ah_attr.dlid = u32_to_17(dest_info[i].lid);
-      }
-#else
       attr.ah_attr.dlid = dest_info[i].lid;
-#endif
     }
 
     if (gda_provider == GDAProvider::BNXT) {

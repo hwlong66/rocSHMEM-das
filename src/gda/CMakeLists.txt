@@ -46,6 +46,6 @@ if(GDA_SHCA)
   add_subdirectory(shca)
 endif()
 
-if(GDA_MLX5 AND GDA_SHCA)
+if(GDA_MLX5 AND GDA_SHCA AND NOT SHCA_GENERAL_DRIVER)
   add_subdirectory(verbs_adapter)
 endif()

@@ -80,6 +80,7 @@ option(GDA_IONIC "Build for the IONIC RDMA provider" OFF)
 option(GDA_BNXT "Build for Broadcom RDMA provider" OFF)
 option(GDA_MLX5 "Build for Mellanox MLX5 RDMA provider" OFF)
 option(GDA_SHCA "Build for Dawning SHCA RDMA provider" OFF)
+option(SHCA_GENERAL_DRIVER "Build for the SHCA general driver with standard verbs ABI" OFF)
 option(ASAN "Enable AddressSanitizer" ${ASAN})
 
 set(USE_EXTERNAL_MPI AUTO CACHE STRING "Link with an external MPI (required if used MPI is ABI incompatible with Open MPI v5)")

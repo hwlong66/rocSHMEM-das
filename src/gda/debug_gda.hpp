@@ -89,12 +89,12 @@ static void dump_ibv_port_attr([[maybe_unused]] struct ibv_port_attr* x) {
             "========",
             x->state, x->max_mtu, x->active_mtu, x->gid_tbl_len, x->port_cap_flags, x->max_msg_sz,
             x->bad_pkey_cntr, x->qkey_viol_cntr, x->pkey_tbl_len,
-#if defined(GDA_SHCA)
+#if defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
             u17_to_32(x->lid),
 #else
             x->lid,
 #endif
-#if defined(GDA_SHCA)
+#if defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
             u17_to_32(x->sm_lid),
 #else
             x->sm_lid,

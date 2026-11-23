@@ -38,7 +38,7 @@ namespace rocshmem {
 
 IBVWrapper ibv;
 
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
 #include "verbs_adapter/ibv_wrapper_adapter.inc"
 #endif
 
@@ -171,7 +171,7 @@ struct ibv_context* IBVWrapper::open_device(struct ibv_device *device) {
 }
 
 IBVWrapper::ContextInfo IBVWrapper::context_info(ibv_context* context) const {
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
   const auto info = adapter_api(context)->context_info(context);
   return {static_cast<ibv_device*>(info.device), info.cmd_fd, info.async_fd,
           info.num_comp_vectors, info.abi_compat};
@@ -195,7 +195,7 @@ int IBVWrapper::query_device(struct ibv_context *context, struct ibv_device_attr
 
 int IBVWrapper::query_port(struct ibv_context* context, uint8_t port_num,
                            struct ibv_port_attr* port_attr) {
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
   verbs_adapter::PortAttr value{};
   int rc = adapter_api(context)->query_port(context, port_num, &value);
   if (rc) return rc;
@@ -236,7 +236,7 @@ struct ibv_pd* IBVWrapper::alloc_pd(struct ibv_context *context) {
 
 struct ibv_pd * IBVWrapper::alloc_parent_domain(struct ibv_context *context,
                                                 struct ibv_parent_domain_init_attr *attr) {
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
   return static_cast<ibv_pd*>(adapter_api(context)->alloc_parent_domain(context, attr));
 #else
   // Passthrough function for ibv_alloc_parent_domain macro in verbs.h
@@ -308,7 +308,7 @@ int IBVWrapper::dereg_mr(struct ibv_mr *mr) {
 
 struct ibv_cq_ex *IBVWrapper::create_cq_ex(struct ibv_context *context,
                                            struct ibv_cq_init_attr_ex *cq_attr) {
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
   return static_cast<ibv_cq_ex*>(adapter_api(context)->create_cq_ex(context, cq_attr));
 #else
   // Passthrough function for ibv_create_cq_ex macro in verbs.h
@@ -327,7 +327,7 @@ int IBVWrapper::destroy_cq(struct ibv_cq *cq) {
 
 struct ibv_qp * IBVWrapper::create_qp_ex(struct ibv_context *context,
                                          struct ibv_qp_init_attr_ex *qp_init_attr_ex) {
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
   return static_cast<ibv_qp*>(adapter_api(context)->create_qp_ex(context, qp_init_attr_ex));
 #else
   // Passthrough function for ibv_create_qp_ex macro in verbs.h
@@ -347,7 +347,7 @@ struct ibv_qp * IBVWrapper::create_qp_ex(struct ibv_context *context,
 }
 
 int IBVWrapper::modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr, int attr_mask) {
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
   auto value = to_adapter_qp_attr(*attr, attr_mask);
   return adapter_api(qp->context)->modify_qp(qp, &value, attr_mask);
 #else
@@ -365,7 +365,7 @@ uint16_t IBVWrapper::flow_label_to_udp_sport(uint32_t fl) {
 }
 
 struct ibv_ah* IBVWrapper::create_ah(struct ibv_pd *pd, struct ibv_ah_attr *attr) {
-#if defined(GDA_MLX5) && defined(GDA_SHCA)
+#if defined(GDA_MLX5) && defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
   auto value = to_adapter_ah_attr(*attr);
   return static_cast<ibv_ah*>(adapter_api(pd->context)->create_ah(pd, &value));
 #else

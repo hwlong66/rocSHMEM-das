@@ -87,9 +87,10 @@ struct NicDevice {
 class GDABackend : public Backend {
  private:
   typedef struct dest_info {
+#if defined(GDA_SHCA) && !defined(SHCA_GENERAL_DRIVER)
+    u17 lid;
+#else
     int lid;
-#if defined(GDA_SHCA)
-    u17 shca_lid;
 #endif
     int qpn;
     int psn;

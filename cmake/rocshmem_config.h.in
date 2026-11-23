@@ -43,6 +43,7 @@
 #cmakedefine GDA_BNXT
 #cmakedefine GDA_MLX5
 #cmakedefine GDA_SHCA
+#cmakedefine SHCA_GENERAL_DRIVER
 #cmakedefine HAVE_EXTERNAL_MPI
 #cmakedefine HAVE_DEVICE_MALLOC_UNCACHED
 #cmakedefine USE_DAS
